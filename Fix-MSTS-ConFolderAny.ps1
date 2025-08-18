@@ -147,34 +147,34 @@ function Try-FastPath([string]$kind,[string]$shape,[string]$folder,[object[]]$lo
     $needTokens = Get-TrimmedTokens $folder $shape
 
     # 1) Exact in same folder
-    $exLocal = @($local | Where-Object { (Get-NormKey $_.Folder ($_.Shape ?? $_.Name)) -eq $needKey })
+    $exLocal = @($local | Where-Object { (Get-NormKey $_.Folder (if ($_.Shape) { $_.Shape } else { $_.Name })) -eq $needKey })
     if($exLocal.Count -gt 0){
         $best = $exLocal[0]
-        Write-Log 'INFO' ("FastPath hit: LocalExact for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
+        Write-Log 'INFO' ("FastPath hit: LocalExact for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,(if ($best.Shape) { $best.Shape } else { $best.Name }),$best.Folder)
         return $best
     }
 
     # 2) Exact in global
-    $exGlob = @($global | Where-Object { (Get-NormKey $_.Folder ($_.Shape ?? $_.Name)) -eq $needKey })
+    $exGlob = @($global | Where-Object { (Get-NormKey $_.Folder (if ($_.Shape) { $_.Shape } else { $_.Name })) -eq $needKey })
     if($exGlob.Count -gt 0){
         $best = $exGlob[0]
-        Write-Log 'INFO' ("FastPath hit: GlobalExact for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
+        Write-Log 'INFO' ("FastPath hit: GlobalExact for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,(if ($best.Shape) { $best.Shape } else { $best.Name }),$best.Folder)
         return $best
     }
 
     # 3) 2-token overlap in same folder
-    $twoLocal = @($local | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder ($_.Shape ?? $_.Name)) })
+    $twoLocal = @($local | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder (if ($_.Shape) { $_.Shape } else { $_.Name })) })
     if($twoLocal.Count -gt 0){
         $best = ($twoLocal | Sort-Object { - [double](Score-Candidate $shape $folder $_) })[0]
-        Write-Log 'INFO' ("FastPath hit: Local2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
+        Write-Log 'INFO' ("FastPath hit: Local2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,(if ($best.Shape) { $best.Shape } else { $best.Name }),$best.Folder)
         return $best
     }
 
     # 4) 2-token overlap in global
-    $twoGlob = @($global | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder ($_.Shape ?? $_.Name)) })
+    $twoGlob = @($global | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder (if ($_.Shape) { $_.Shape } else { $_.Name })) })
     if($twoGlob.Count -gt 0){
         $best = ($twoGlob | Sort-Object { - [double](Score-Candidate $shape $folder $_) })[0]
-        Write-Log 'INFO' ("FastPath hit: Global2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
+        Write-Log 'INFO' ("FastPath hit: Global2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,(if ($best.Shape) { $best.Shape } else { $best.Name }),$best.Folder)
         return $best
     }
 

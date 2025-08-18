@@ -1120,7 +1120,11 @@ $loaded = $false
 if($UseCache){ $loaded = Load-Index }
 if(-not $loaded){ Build-Index; if($UseCache){ Save-Index } }
 
-$cons  = Get-ChildItem -LiteralPath $ConsistsPath -Filter '*.con' -ErrorAction Stop | Where-Object { -not $_.PSIsContainer }
+$cons  = @(Get-ChildItem -LiteralPath $ConsistsPath -Filter '*.con' -ErrorAction Stop | Where-Object { -not $_.PSIsContainer })
+if($cons.Count -eq 0){
+    Write-Log 'WARN' "No .con files found in $ConsistsPath"
+    return
+}
 $total = $cons.Count
 Write-Log 'INFO' ("Found .con:      {0}" -f $total)
 

@@ -1,4 +1,4 @@
-# Fix-MSTS-ConFolderAny.ps1 (v3.4.3 – PS5+ safe sorts)
+# Fix-MSTS-ConFolderAny.ps1 (v3.4.4 – PS5+ safe sorts)
 # Purpose: Repair .con files by resolving missing EngineData/WagonData references using
 #          (1) same-folder token match (folder tokens excluded),
 #          (2) global-from-cache/index match (excluding _DEFAULTS),
@@ -14,6 +14,8 @@
 #   - Live console output via Write-Progress; simple "CON:" summary lines when -LogChanges is used.
 #   - _logs\FixMSTS_Summary.log is created (header "===== SUMMARY =====") when -LogChanges is passed.
 #
+# PATCH (v3.4.4):
+#   - Removed unused -MaxFuzzy parameter.
 # PATCH (v3.4.3):
 #   - Replaced all "negated score" sorts with: Sort-Object -Property { (Score-Candidate ...) } -Descending
 #     (avoids op_Subtraction on arrays in PS 7.x/5.x).
@@ -27,7 +29,6 @@ param(
     [Parameter()] [switch]$DryRun,
     [switch]$UseCache,
     [switch]$FastIndex,           # scan immediate subfolders only (no deep recurse)
-    [int]$MaxFuzzy = 46,          # reserved
     [switch]$StrictEngineClass,   # prefer same loco class (WAP/WAG/WDG/WDM)
     [switch]$StrictWagonType,     # prefer same passenger coach class (1A/2A/3A/SL/GS/CC/EOG/PC)
     [int]$MinLocalScore = 40,     # threshold for "near match" within SAME folder

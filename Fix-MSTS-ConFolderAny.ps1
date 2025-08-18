@@ -686,13 +686,6 @@ function Jaccard([string]$a,[string]$b){
     return [double]($inter) / [double]($union)
 }
 
-    $tb = New-Object 'System.Collections.Generic.HashSet[string]'; foreach($t in (Split-Tokens $b)){ if($t){ [void]$tb.Add($t) } }
-    if($ta.Count -eq 0 -and $tb.Count -eq 0){ return 0.0 }
-    $inter = 0; foreach($t in $ta){ if($tb.Contains($t)){ $inter++ } }
-    $union = ($ta.Count + $tb.Count - $inter); if($union -eq 0){ return 0.0 }
-    return [double]$inter / [double]$union
-
-
 function Score-Candidate([string]$shape,[string]$folder,[pscustomobject]$cand){    # === Guardrails & token parsing (added) ===
     if (Is-PseudoToken $shape) { return -9999 }
 

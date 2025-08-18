@@ -53,6 +53,12 @@ $script:SeriesAlias = @{
     'wdg4d'='wdg4'; 'wdm3a'='wdm3'
 }
 
+# common stop words excluded from token comparisons
+$script:StopWords = @(
+    'coach','coaches','wagon','wagons','train','trains',
+    'indian','railway','railways','pack','default','generic'
+)
+
 function Parse-EngineTokens {
     param([string]$name)
     $n = Normalize-ShapeName $name
@@ -130,7 +136,7 @@ function Get-TrimmedTokens([string]$folder,[string]$name){
     $norm = (Normalize-Name ($folder + ' ' + $name))
     if([string]::IsNullOrWhiteSpace($norm)){ return @() }
     $tokens = @($norm -split '\s+' | Where-Object { $_ -and $_.Length -ge 2 })
-    $stop = @('coach','coaches','wagon','wagons','train','trains','indian','railway','railways','pack','default','generic')
+    $stop = $StopWords
     return @($tokens | Where-Object { $stop -notcontains $_ } | Select-Object -Unique)
 }
 function TwoTokenOverlap([string[]]$need,[string[]]$have){
@@ -188,7 +194,7 @@ function Get-TrimmedTokens([string]$folder,[string]$name){
     $norm = (Normalize-Name ($folder + ' ' + $name))
     if([string]::IsNullOrWhiteSpace($norm)){ return @() }
     $tokens = @($norm -split '\s+' | Where-Object { $_ -and $_.Length -ge 2 })
-    $stop = @('coach','coaches','wagon','wagons','train','trains','indian','railway','railways','pack','default','generic')
+    $stop = $StopWords
     return @($tokens | Where-Object { $stop -notcontains $_ } | Select-Object -Unique)
 }
 function TwoTokenOverlap([string[]]$need,[string[]]$have){

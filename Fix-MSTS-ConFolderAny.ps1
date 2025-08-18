@@ -164,7 +164,7 @@ function Try-FastPath([string]$kind,[string]$shape,[string]$folder,[object[]]$lo
     # 3) 2-token overlap in same folder
     $twoLocal = @($local | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder ($_.Shape ?? $_.Name)) })
     if($twoLocal.Count -gt 0){
-        $best = ($twoLocal | Sort-Object { - [double](Score-Candidate $shape $folder $_) })[0]
+        $best = ($twoLocal | Sort-Object -Property { [double](Score-Candidate $shape $folder $_) } -Descending)[0]
         Write-Log 'INFO' ("FastPath hit: Local2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
         return $best
     }
@@ -172,7 +172,7 @@ function Try-FastPath([string]$kind,[string]$shape,[string]$folder,[object[]]$lo
     # 4) 2-token overlap in global
     $twoGlob = @($global | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder ($_.Shape ?? $_.Name)) })
     if($twoGlob.Count -gt 0){
-        $best = ($twoGlob | Sort-Object { - [double](Score-Candidate $shape $folder $_) })[0]
+        $best = ($twoGlob | Sort-Object -Property { [double](Score-Candidate $shape $folder $_) } -Descending)[0]
         Write-Log 'INFO' ("FastPath hit: Global2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,($best.Shape ?? $best.Name),$best.Folder)
         return $best
     }
@@ -222,7 +222,7 @@ function Try-FastPath([string]$kind,[string]$shape,[string]$folder,[object[]]$lo
     # 3) 2-token overlap in same folder
     $twoLocal = @($local | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder $_.Name) })
     if ($twoLocal.Count -gt 0) {
-        $best = ($twoLocal | Sort-Object { - (Score-Candidate $shape $folder $_) })[0]
+        $best = ($twoLocal | Sort-Object -Property { Score-Candidate $shape $folder $_ } -Descending)[0]
         Write-Log 'INFO' ("FastPath hit: Local2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,$best.Name,$best.Folder)
         return $best
     }
@@ -230,7 +230,7 @@ function Try-FastPath([string]$kind,[string]$shape,[string]$folder,[object[]]$lo
     # 4) 2-token overlap in global
     $twoGlob = @($global | Where-Object { TwoTokenOverlap $needTokens (Get-TrimmedTokens $_.Folder $_.Name) })
     if ($twoGlob.Count -gt 0) {
-        $best = ($twoGlob | Sort-Object { - (Score-Candidate $shape $folder $_) })[0]
+        $best = ($twoGlob | Sort-Object -Property { Score-Candidate $shape $folder $_ } -Descending)[0]
         Write-Log 'INFO' ("FastPath hit: Global2Tok for '{0}' in '{1}' -> {2}/{3}" -f $shape,$folder,$best.Name,$best.Folder)
         return $best
     }

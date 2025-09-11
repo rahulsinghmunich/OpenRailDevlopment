@@ -60,6 +60,32 @@ class ConsistEditorCLI:
         print("WARNING: consistEditor.py not found in current directory")
         print("Please ensure the resolver script is available")
     
+    def find_python_executable(self):
+        """Find the best Python executable to use"""
+        
+        # First, check if we're already in a virtual environment
+        if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+            return sys.executable
+        
+        # Look for virtual environment in current directory
+        current_dir = Path.cwd()
+        for v in ['venv', '.venv', 'env', '.env', 'virtualenv']:
+            vp = current_dir / v
+            if vp.is_dir():
+                py = vp / "Scripts" / "python.exe"
+                if not py.exists():
+                    py = vp / "bin" / "python"
+                if py.exists():
+                    return str(py)
+        
+        # Try to find Python in PATH
+        python_in_path = shutil.which('python')
+        if python_in_path:
+            return python_in_path
+        
+        # Last resort: use current sys.executable
+        return sys.executable
+    
     def print_banner(self):
         """Print application banner"""
         
@@ -315,8 +341,9 @@ Features:
         
         print("=== RUNNING RESOLVER ===")
         
-        # Build command
-        cmd = [sys.executable, self.resolver_script, self.consists_dir, self.trainset_dir]
+        # Build command - use more robust Python detection
+        python_exe = self.find_python_executable()
+        cmd = [python_exe, self.resolver_script, self.consists_dir, self.trainset_dir]
         
         if self.config['dry_run']:
             cmd.append('--dry-run')

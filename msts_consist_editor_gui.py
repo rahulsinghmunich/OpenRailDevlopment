@@ -62,8 +62,13 @@ class ConsistEditorGUI:
                 self.log_message("Virtual environment detected and will be used for resolver")
             else:
                 script_dir = Path(__file__).parent if __file__ else Path.cwd()
+                self.log_message(f"Looking for virtual environment in: {script_dir}")
+
+                # Look for venv in multiple possible locations
+                venv_found = False
                 for v in ['venv', '.venv', 'env', '.env', 'virtualenv']:
                     vp = script_dir / v
+                    self.log_message(f"Checking {v} directory: {vp}")
                     if vp.is_dir():
                         py = vp / "Scripts" / "python.exe"
                         if not py.exists():
@@ -71,13 +76,28 @@ class ConsistEditorGUI:
                         if py.exists():
                             self.venv_python_path = str(py)
                             self.log_message(f"Found virtual environment at: {vp}")
+                            venv_found = True
                             break
-                if not self.venv_python_path:
-                    self.venv_python_path = sys.executable
-                    self.log_message("No virtual environment found, using system Python")
+                        else:
+                            self.log_message(f"Python executable not found at: {py}")
+                    else:
+                        self.log_message(f"Directory {v} not found at: {vp}")
+
+                if not venv_found:
+                    # Try to find Python in PATH
+                    import shutil
+                    python_in_path = shutil.which('python')
+                    if python_in_path:
+                        self.venv_python_path = python_in_path
+                        self.log_message(f"Using Python from PATH: {python_in_path}")
+                    else:
+                        # Last resort: use current sys.executable
+                        self.venv_python_path = sys.executable
+                        self.log_message(f"No virtual environment found, using current Python: {sys.executable}")
         except Exception as e:
+            # Last resort: use current sys.executable
             self.venv_python_path = sys.executable
-            self.log_message(f"Error detecting virtual environment: {e}, using system Python")
+            self.log_message(f"Error detecting virtual environment: {e}, using current Python: {sys.executable}")
         self.setup_gui()
         self.process_messages()
 
@@ -347,7 +367,13 @@ class ConsistEditorGUI:
         if self.venv_python_path != sys.executable:
             self.log_message("Virtual environment detected - resolver will use venv Python")
         else:
-            self.log_message("Using system Python for resolver (no virtual environment detected)")
+            # Check if we're currently running in a venv or using system Python
+            import os
+            system_python = os.path.join(os.path.dirname(sys.executable), 'python.exe')
+            if 'venv' in sys.executable.lower() or '.venv' in sys.executable.lower():
+                self.log_message("Running in virtual environment - resolver will use venv Python")
+            else:
+                self.log_message("Using system Python for resolver (no virtual environment detected)")
 
     def browse_consists_folder(self):
         folder = filedialog.askdirectory(title="Select Consists Directory")
@@ -1587,6 +1613,9 @@ class ConsistEditorGUI:
                     elif msg_type == 'refresh':
                         self.log_message("Processing refresh message")
                         self.refresh_consist_view()
+                        # Also refresh the consist files list colors after resolution
+                        if self.consists_path.get():
+                            self.refresh_counts()
                     elif msg_type == 'resolver_progress_show':
                         try:
                             if not self.resolver_progress_visible:
@@ -2051,6 +2080,27 @@ class ConsistEditorGUI:
                 cmd.append('--explain')
             if self.debug_var.get():
                 cmd.append('--debug')
+            
+            # Verify the Python executable exists before running
+            import os
+            if not os.path.exists(self.venv_python_path):
+                self.message_queue.put(('log', f"ERROR: Python executable not found: {self.venv_python_path}"))
+                self.message_queue.put(('log', "Trying to find alternative Python..."))
+                
+                # Try to find alternative Python
+                import shutil
+                alt_python = shutil.which('python')
+                if alt_python:
+                    self.message_queue.put(('log', f"Using alternative Python: {alt_python}"))
+                    cmd[0] = alt_python
+                else:
+                    self.message_queue.put(('log', "ERROR: No Python executable found"))
+                    return
+            
+            # Verify the resolver script exists
+            if not os.path.exists(self.resolver_script_path):
+                self.message_queue.put(('log', f"ERROR: Resolver script not found: {self.resolver_script_path}"))
+                return
             
             self.message_queue.put(('log', f"Running resolver command: {' '.join(cmd)}"))
             self.message_queue.put(('log', "Resolver started..."))

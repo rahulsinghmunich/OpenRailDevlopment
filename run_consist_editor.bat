@@ -78,16 +78,42 @@ goto invalid_choice
 
 :gui_mode
 echo.
-echo Starting GUI Mode...
-echo ────────────────────────────────────────────────────────────────────────────
-if exist "msts_consist_editor_gui.py" (
-    python msts_consist_editor_gui.py
-) else (
-    echo ERROR: msts_consist_editor_gui.py not found
-    echo Please ensure all required files are present
+@echo off
+echo Starting MSTS Consist Editor...
+
+REM Check if virtual environment exists
+if not exist .venv (
+    echo Virtual environment not found. Running setup...
+    call setup.bat
+    if errorlevel 1 (
+        echo Setup failed. Please run setup.bat manually.
+        pause
+        exit /b 1
+    )
+)
+
+REM Activate virtual environment
+call .venv\Scripts\activate
+
+REM Check if GUI file exists
+if not exist msts_consist_editor_gui.py (
+    echo ERROR: msts_consist_editor_gui.py not found in current directory
+    echo Please ensure all files are in the same directory
+    pause
+    exit /b 1
+)
+
+REM Run the GUI application
+echo Launching MSTS Consist Editor GUI...
+python msts_consist_editor_gui.py
+
+REM Keep window open if there's an error
+if errorlevel 1 (
+    echo.
+    echo Application exited with error code %errorlevel%
+    echo Press any key to continue...
     pause
 )
-goto menu
 
 :cli_mode
 echo.

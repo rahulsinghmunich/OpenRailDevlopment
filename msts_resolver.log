@@ -1,0 +1,79 @@
+2025-09-11 18:15:14,636 - INFO - Random seed initialized: 42 (fixed for consistency)
+2025-09-11 18:15:14,636 - INFO - MSTS Asset Resolver v2.3.0 - STRICT ATTRIBUTE LOCKING
+2025-09-11 18:15:14,636 - INFO - ================================================================================
+2025-09-11 18:15:14,636 - INFO - NEW v2.3.0 STRICT ATTRIBUTE LOCKING:
+2025-09-11 18:15:14,636 - INFO - - DERIVE AND LOCK: Extract Family, Subtype, Class, Build from consist entry
+2025-09-11 18:15:14,636 - INFO - - STRICT FILTERING: Only consider trainset assets with EXACT matches for all four attributes
+2025-09-11 18:15:14,637 - INFO - - NAME-FIRST: Exact name match within locked attributes (highest priority)
+2025-09-11 18:15:14,637 - INFO - - TOKEN MATCHING: Apply name/token ranking within locked attributes
+2025-09-11 18:15:14,637 - INFO - - DEFAULT STRICT: Require at least Subtype match for defaults
+2025-09-11 18:15:14,637 - INFO - - UNRESOLVED: If no attributes detected or no matches found, mark as UNRESOLVED
+2025-09-11 18:15:14,637 - INFO - PREVIOUS v2.2.5 ENHANCEMENTS:
+2025-09-11 18:15:14,637 - INFO - - ENHANCED: Comprehensive freight detection based on 533 real wagon files analysis
+2025-09-11 18:15:14,637 - INFO - - NEW: Support for BSAM series (168 wagons), CON_ containers (42 wagons), ASMI series (37 wagons)
+2025-09-11 18:15:14,637 - INFO - - NEW: Enhanced freight types: CEMENT, COIL, COAL, MILKTANKER, BCCN, BRNA, BRW, BCA, BCB, BTI
+2025-09-11 18:15:14,638 - INFO - Found 1 consist files to process
+2025-09-11 18:15:14,641 - INFO - Parsed 1 consists with 18 asset references
+2025-09-11 18:15:14,641 - INFO - Building asset index from E:\Game\ROUTES\Microsoft Games\Train Simulator\TRAINS\TRAINSET
+2025-09-11 18:15:14,661 - INFO - Scanning folder 1/1543: 02833 RJT-SRC AC SF EXP
+2025-09-11 18:15:14,806 - INFO - Scanning folder 51/1543: AERO_DMU
+2025-09-11 18:15:14,911 - INFO - Scanning folder 101/1543: APS_TATA_STEEL_30614
+2025-09-11 18:15:15,250 - INFO - Scanning folder 151/1543: BGP - BLCA-B Wagons
+2025-09-11 18:15:15,418 - INFO - Scanning folder 201/1543: BHOPAL_IT_BSL PASSANGER
+2025-09-11 18:15:15,473 - INFO - Scanning folder 251/1543: brc_wap7_30607
+2025-09-11 18:15:15,540 - INFO - Scanning folder 301/1543: Central Railways Garibrath Exp
+2025-09-11 18:15:15,646 - INFO - Scanning folder 351/1543: DCBNA3
+2025-09-11 18:15:15,737 - INFO - Scanning folder 401/1543: D_Samms709
+2025-09-11 18:15:15,867 - INFO - Scanning folder 451/1543: g15_gueter
+2025-09-11 18:15:15,957 - INFO - Scanning folder 501/1543: GP38
+2025-09-11 18:15:16,081 - INFO - Scanning folder 551/1543: HR_MILITARY_COACHES
+2025-09-11 18:15:16,261 - INFO - Scanning folder 601/1543: indiangaribrath
+2025-09-11 18:15:16,365 - INFO - Scanning folder 651/1543: JAIPUR MUMBAI SF
+2025-09-11 18:15:16,509 - INFO - Scanning folder 701/1543: KANPUR WAP4 22330
+2025-09-11 18:15:16,618 - INFO - Scanning folder 751/1543: KURJ-UDZ EXPRESS
+2025-09-11 18:15:16,776 - INFO - Scanning folder 801/1543: LHB SEATING
+2025-09-11 18:15:16,924 - INFO - Scanning folder 851/1543: LTT VARANASI SUMMER SP
+2025-09-11 18:15:17,033 - INFO - Scanning folder 901/1543: MLW ELECTRIC LOCOS
+2025-09-11 18:15:17,169 - INFO - Scanning folder 951/1543: MSA_WDMS
+2025-09-11 18:15:17,355 - INFO - Scanning folder 1001/1543: NILKANTH WDG4 UBL
+2025-09-11 18:15:17,483 - INFO - Scanning folder 1051/1543: PrashantK_HWH_PUNE_DURONTO EXP
+2025-09-11 18:15:17,594 - INFO - Scanning folder 1101/1543: Ratlam WDM3a
+2025-09-11 18:15:17,730 - INFO - Scanning folder 1151/1543: SBI YDM4
+2025-09-11 18:15:17,857 - INFO - Scanning folder 1201/1543: SLW
+2025-09-11 18:15:17,946 - INFO - Scanning folder 1251/1543: Teesta Torsa Express Coaches
+2025-09-11 18:15:18,177 - INFO - Scanning folder 1301/1543: TRI WAP4 SRC
+2025-09-11 18:15:18,260 - INFO - Scanning folder 1351/1543: VADODARA SF
+2025-09-11 18:15:18,486 - INFO - Scanning folder 1401/1543: VTA WDM3A 18669
+2025-09-11 18:15:18,645 - INFO - Scanning folder 1451/1543: WAP530045
+2025-09-11 18:15:18,693 - INFO - Scanning folder 1501/1543: WDM3BJHS
+2025-09-11 18:15:18,777 - INFO - Asset index built: 12124 assets in 1543 folders
+2025-09-11 18:15:18,778 - INFO - Index statistics: {'total_assets': 12124, 'engines': 4202, 'wagons': 7922, 'folders': 1501, 'engine_classes': 34, 'coach_types': 13, 'freight_types': 55, 'ir_composites': 382, 'lhb_assets': 1205, 'icf_assets': 397, 'emu_assets': 224}
+2025-09-11 18:15:18,779 - INFO - Starting STRICT ATTRIBUTE LOCKING resolution process with optimized parallel processing...
+2025-09-11 18:15:18,779 - INFO - Using ProcessPoolExecutor with 16 workers (CPU cores: 16)
+2025-09-11 18:15:22,458 - INFO - Asset resolution completed. Processed 18 entries.
+2025-09-11 18:15:22,458 - INFO - Writing changes to consist files...
+2025-09-11 18:15:22,458 - INFO - File writing completed. Modified 0 consist files.
+2025-09-11 18:15:22,459 - INFO - SUMMARY: 
+2025-09-11 18:15:22,459 - INFO - SUMMARY: ================================================================================
+2025-09-11 18:15:22,459 - INFO - SUMMARY: MSTS ASSET RESOLVER - STRICT ATTRIBUTE LOCKING v2.3.0 - FINAL SUMMARY
+2025-09-11 18:15:22,459 - INFO - SUMMARY: ================================================================================
+2025-09-11 18:15:22,459 - INFO - SUMMARY: Files Processed: 18 asset references
+2025-09-11 18:15:22,459 - INFO - SUMMARY: Assets Indexed: 12124 trainset assets
+2025-09-11 18:15:22,459 - INFO - SUMMARY: Processing Time: 7.8 seconds
+2025-09-11 18:15:22,459 - INFO - SUMMARY: 
+2025-09-11 18:15:22,459 - INFO - SUMMARY: RESOLVED: 18 (100.0%)
+2025-09-11 18:15:22,460 - INFO - SUMMARY: CHANGED: 0 (0.0%)
+2025-09-11 18:15:22,460 - INFO - SUMMARY: ALREADY MATCHING: 18 (100.0%)
+2025-09-11 18:15:22,460 - INFO - SUMMARY: UNRESOLVED: 0 (0.0%)
+2025-09-11 18:15:22,460 - INFO - SUMMARY: 
+2025-09-11 18:15:22,460 - INFO - SUMMARY: Resolution Method Breakdown:
+2025-09-11 18:15:22,460 - INFO - SUMMARY:   • EXACT_NAME: 18 (100.0%)
+2025-09-11 18:15:22,460 - INFO - SUMMARY: 
+2025-09-11 18:15:22,460 - INFO - SUMMARY: Recommendations:
+2025-09-11 18:15:22,460 - INFO - SUMMARY:   • Excellent! 100.0% resolution rate achieved with strict matching
+2025-09-11 18:15:22,460 - INFO - SUMMARY: STRICT ATTRIBUTE LOCKING FEATURES:
+2025-09-11 18:15:22,460 - INFO - SUMMARY:   • Family, Subtype, Class, Build derived and locked from consist entries
+2025-09-11 18:15:22,461 - INFO - SUMMARY:   • Only trainset assets with EXACT attribute matches considered
+2025-09-11 18:15:22,461 - INFO - SUMMARY:   • Default fallback requires at least Subtype match
+2025-09-11 18:15:22,461 - INFO - SUMMARY:   • Entries with no detectable attributes marked UNRESOLVED
+2025-09-11 18:15:22,461 - INFO - SUMMARY: ================================================================================

@@ -2290,51 +2290,36 @@ def apply_strict_attribute_filter(
         is_wagon = asset.kind == AssetKind.WAGON
         
         if is_wagon:
-            # For wagons: require Class match, then validate other attributes more carefully
-            # Family is optional and not required for wagons
-            class_matches = not klass or _ci_eq(asset_class, klass) or (
-                # Use compatibility for wagon class matching
-                enhance_wagon_matching_with_compatibility([asset], klass, asset.name) if klass else True
-            )
+            # For wagons: strict matching - require EXACT matches for all detected attributes
+            # If target has an attribute, asset must have the same attribute value
+            class_conflict = klass and not (_ci_eq(asset_class, klass) or (
+                # Use compatibility for wagon class matching as fallback
+                enhance_wagon_matching_with_compatibility([asset], klass, asset.name) if klass else False
+            ))
+            family_conflict = family and not _ci_eq(asset_family, family)
+            subtype_conflict = subtype and not _ci_eq(asset_subtype, subtype)
+            build_conflict = build and not _ci_eq(asset_build, build)
             
-            if not class_matches:
+            # Reject if any required attribute doesn't match
+            if class_conflict or family_conflict or subtype_conflict or build_conflict:
                 matches = False
             else:
-                # Class matches, now check other attributes
-                # If a specific attribute is requested, it should match (no false positives)
-                subtype_conflict = subtype and asset_subtype and not _ci_eq(asset_subtype, subtype)
-                build_conflict = build and asset_build and not _ci_eq(asset_build, build)
-                
-                # Reject if there's a direct conflict
-                if subtype_conflict or build_conflict:
-                    matches = False
-                else:
-                    # No conflicts, accept if we have at least one positive match
-                    has_subtype_match = not subtype or _ci_eq(asset_subtype, subtype)
-                    has_build_match = not build or _ci_eq(asset_build, build)
-                    
-                    # Accept if at least one requested attribute matches (or none were requested)
-                    matches = has_subtype_match or has_build_match or (not subtype and not build)
+                # All required attributes match (or weren't specified)
+                matches = True
         else:
-            # For engines: more flexible matching - require at least Class match, be flexible with Family
-            class_matches = not klass or _ci_eq(asset_class, klass)
+            # For engines: strict matching - require EXACT matches for all detected attributes
+            # If target has an attribute, asset must have the same attribute value
+            class_conflict = klass and not _ci_eq(asset_class, klass)
+            family_conflict = family and not _ci_eq(asset_family, family)
+            subtype_conflict = subtype and not _ci_eq(asset_subtype, subtype)
+            build_conflict = build and not _ci_eq(asset_build, build)
             
-            if not class_matches:
+            # Reject if any required attribute doesn't match
+            if class_conflict or family_conflict or subtype_conflict or build_conflict:
                 matches = False
             else:
-                # Class matches, now check other attributes more flexibly
-                # Family is often not consistently set in trainset assets, so be more lenient
-                family_conflict = family and asset_family and not _ci_eq(asset_family, family)
-                subtype_conflict = subtype and asset_subtype and not _ci_eq(asset_subtype, subtype)
-                build_conflict = build and asset_build and not _ci_eq(asset_build, build)
-                
-                # Only reject if there's a direct conflict in non-family attributes
-                if subtype_conflict or build_conflict:
-                    matches = False
-                else:
-                    # Accept if we have class match and no conflicts
-                    # Family mismatch is OK for engines (many trainset assets don't have family set)
-                    matches = True
+                # All required attributes match (or weren't specified)
+                matches = True
 
         if matches:
             filtered.append(asset)

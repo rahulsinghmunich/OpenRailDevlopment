@@ -1,0 +1,27 @@
+SIMISA@@@@@@@@@@JINX0D0t______
+
+Train (
+	TrainCfg (
+		Name ( "Test Consist" )
+		Serial ( 1 )
+		MaxVelocity ( 50.00000 1.00000 )
+		NextWagonUID ( 2 )
+		Durability ( 1.00000 )
+		Engine (
+			UiD ( 1 )
+			EngineData ( WAP4 WAP4 )
+		)
+		Wagon (
+			UiD ( 2 )
+			WagonData ( BOXN BOXN )
+		)
+		Wagon (
+			UiD ( 3 )
+			WagonData ( BCN BCN )
+		)
+		Wagon (
+			UiD ( 4 )
+			WagonData ( BTPN BTPN )
+		)
+	)
+)

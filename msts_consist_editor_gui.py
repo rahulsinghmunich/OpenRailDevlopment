@@ -28,6 +28,9 @@ class ConsistEditorGUI:
 
         self.consists_path = tk.StringVar()
         self.trainset_path = tk.StringVar()
+        # recent paths persistence (stores last two entries for consists and trainset)
+        self._recent_paths_file = Path.home() / '.msts_consist_editor_recent_paths.json'
+        self._recent_paths = {'consists': [], 'trainsets': []}
         self.selected_consist = tk.StringVar()
         self.current_entries = []
         self._unsaved_changes = False
@@ -138,13 +141,17 @@ class ConsistEditorGUI:
         ttk.Label(parent, text="Consists Directory:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
         c_frame = ttk.Frame(parent); c_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         c_frame.columnconfigure(0, weight=1)
-        ttk.Entry(c_frame, textvariable=self.consists_path, width=40).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        # Use Combobox so we can show last-used paths as hints while retaining free text
+        self.consists_combo = ttk.Combobox(c_frame, textvariable=self.consists_path, values=[], width=40)
+        self.consists_combo.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(c_frame, text="Browse", command=self.browse_consists_folder).grid(row=0, column=1)
 
         ttk.Label(parent, text="Trainset Directory:").grid(row=2, column=0, sticky=tk.W, pady=(0, 5))
         t_frame = ttk.Frame(parent); t_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         t_frame.columnconfigure(0, weight=1)
-        ttk.Entry(t_frame, textvariable=self.trainset_path, width=40).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        # Use Combobox for trainset path as well
+        self.trainset_combo = ttk.Combobox(t_frame, textvariable=self.trainset_path, values=[], width=40)
+        self.trainset_combo.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(t_frame, text="Browse", command=self.browse_trainset_folder).grid(row=0, column=1)
 
         load_frame = ttk.Frame(parent); load_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
@@ -154,7 +161,8 @@ class ConsistEditorGUI:
 
         files_frame = ttk.LabelFrame(parent, text="Consist Files", padding="6")
         files_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
-        files_frame.columnconfigure(0, weight=1)
+        files_frame.columnconfigure(0, weight=1)  # Treeview column
+        files_frame.columnconfigure(1, weight=0)  # Vertical scrollbar column
         # Use a Treeview with a fixed width for the filename column so long names
         # don't resize the whole file selection panel. Add a horizontal scrollbar
         # so users can scroll long filenames instead of forcing layout changes.
@@ -173,7 +181,7 @@ class ConsistEditorGUI:
         # Missing count column
         self.consist_files_tree['columns'] = ('missing',)
         self.consist_files_tree.heading('missing', text='Missing')
-        self.consist_files_tree.column('missing', width=80, anchor=tk.CENTER, stretch=False)
+        self.consist_files_tree.column('missing', width=80, anchor=tk.CENTER, stretch=True)
 
         # Place tree and scrollbars; reserve a horizontal scrollbar to avoid layout jumps
         self.consist_files_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -255,14 +263,14 @@ class ConsistEditorGUI:
     def setup_consist_viewer(self, parent):
         columns = ('Type', 'Folder', 'Name', 'Status')
         self.consist_tree = ttk.Treeview(parent, columns=columns, show='headings', height=15)
-        # Make columns fixed-width (no stretch) so content doesn't resize the tree and shift layout
+        # Make columns adaptive to available space - allow stretching to eliminate white space
         for c, w in [('Type',80), ('Folder',200), ('Name',250), ('Status',100)]:
             try:
-                self.consist_tree.column(c, width=w, minwidth=max(60, w//2), stretch=False)
+                self.consist_tree.column(c, width=w, minwidth=max(60, w//2), stretch=True)
             except Exception:
                 # Some ttk versions may not accept minwidth/stretch; fallback to width only
                 try:
-                    self.consist_tree.column(c, width=w, stretch=False)
+                    self.consist_tree.column(c, width=w, stretch=True)
                 except Exception:
                     self.consist_tree.column(c, width=w)
             self.consist_tree.heading(c, text=c)
@@ -279,7 +287,10 @@ class ConsistEditorGUI:
         tree_scroll_v.grid(row=0, column=1, sticky=(tk.N, tk.S))
         tree_scroll_h.grid(row=1, column=0, sticky=(tk.W, tk.E))
 
-        parent.columnconfigure(2, weight=0)
+        # Configure parent frame columns for proper expansion
+        parent.columnconfigure(0, weight=1)  # Treeview column
+        parent.columnconfigure(1, weight=0)  # Vertical scrollbar column
+        parent.columnconfigure(2, weight=0)  # Stores frame column
         stores_frame = ttk.LabelFrame(parent, text="Stores (Engines / Wagons)", padding="6")
         stores_frame.grid(row=0, column=2, rowspan=4, sticky=(tk.N, tk.S, tk.E), padx=(10,0))
 
@@ -298,6 +309,8 @@ class ConsistEditorGUI:
         self.store_subfolder_cb = ttk.Combobox(stores_frame, textvariable=self.store_subfolder_var, values=[''], state='readonly', width=20)
         self.store_subfolder_cb.grid(row=0, column=2, padx=(6,0), pady=(0,6))
         self.store_subfolder_cb.bind('<<ComboboxSelected>>', lambda e: self.load_store_items())
+        self.store_subfolder_cb.configure(postcommand=self._refresh_subfolder_values)
+        self.store_subfolder_cb.bind("<Button-1>", lambda e: self.store_subfolder_cb.event_generate("<Down>") if self.store_subfolder_cb['state'] == 'readonly' else None)
 
         ttk.Checkbutton(stores_frame, text='Scan all top-level subfolders', variable=self.scan_all_subfolders_var, command=self.load_store_items).grid(row=0, column=3, padx=(6,0))
 
@@ -369,6 +382,12 @@ class ConsistEditorGUI:
         except Exception:
             pass
 
+        # Load recent paths (non-blocking and tolerant)
+        try:
+            self._load_recent_paths()
+        except Exception:
+            pass
+
         try:
             self._trainset_update_after_id = None
             def _debounced_update(*args):
@@ -433,12 +452,22 @@ class ConsistEditorGUI:
         if folder:
             self.consists_path.set(folder)
             self.log_message(f"Consists directory set to: {folder}")
+            try:
+                self._add_recent_path('consists', folder)
+                self._refresh_recent_comboboxes()
+            except Exception:
+                pass
 
     def browse_trainset_folder(self):
         folder = filedialog.askdirectory(title="Select Trainset Directory")
         if folder:
             self.trainset_path.set(folder)
             self.log_message(f"Trainset directory set to: {folder}")
+            try:
+                self._add_recent_path('trainsets', folder)
+                self._refresh_recent_comboboxes()
+            except Exception:
+                pass
             try:
                 self.load_store_items()
             except Exception as e:
@@ -551,6 +580,81 @@ class ConsistEditorGUI:
         # Enable resolver button if we have paths set up
         if self.consists_path.get() and (self.trainset_path.get() or self.resolver_script_path):
             self.resolve_button.config(state='normal')
+        # Persist recent paths on successful load
+        try:
+            if consists_dir:
+                self._add_recent_path('consists', consists_dir)
+            tpath = self.trainset_path.get()
+            if tpath:
+                self._add_recent_path('trainsets', tpath)
+            self._refresh_recent_comboboxes()
+        except Exception:
+            pass
+
+        # Refresh store subfolders and items after loading consists
+        try:
+            self.update_store_subfolders()
+            self.load_store_items()
+        except Exception as e:
+            self.log_message(f"Store update error: {e}")
+
+    # ---------- Recent paths persistence helpers ----------
+    def _load_recent_paths(self):
+        try:
+            if self._recent_paths_file.exists():
+                with open(self._recent_paths_file, 'r', encoding='utf-8') as fh:
+                    data = json.load(fh)
+                    if isinstance(data, dict):
+                        self._recent_paths.update({k: v for k, v in data.items() if k in self._recent_paths})
+        except Exception:
+            # ignore errors here
+            pass
+        # Populate comboboxes
+        self._refresh_recent_comboboxes()
+
+    def _save_recent_paths(self):
+        try:
+            # Keep only last 2 of each list to limit size
+            data = {
+                'consists': self._recent_paths.get('consists', [])[:2],
+                'trainsets': self._recent_paths.get('trainsets', [])[:2]
+            }
+            with open(self._recent_paths_file, 'w', encoding='utf-8') as fh:
+                json.dump(data, fh, indent=2)
+        except Exception:
+            pass
+
+    def _add_recent_path(self, kind: str, path: str):
+        if kind not in ('consists', 'trainsets'):
+            return
+        lst = self._recent_paths.setdefault(kind, [])
+        # Normalize
+        p = str(path)
+        if p in lst:
+            lst.remove(p)
+        lst.insert(0, p)
+        # Trim to 5 internally but persist only 2
+        self._recent_paths[kind] = lst[:5]
+        self._save_recent_paths()
+
+    def _refresh_recent_comboboxes(self):
+        try:
+            # Update combobox values while preserving current text
+            cvals = self._recent_paths.get('consists', [])[:2]
+            tvals = self._recent_paths.get('trainsets', [])[:2]
+            if hasattr(self, 'consists_combo'):
+                cur = self.consists_path.get()
+                self.consists_combo['values'] = cvals
+                # If entry empty and we have a recent value, set the first one as hint (do not override user's typed value)
+                if not cur and cvals:
+                    self.consists_path.set(cvals[0])
+            if hasattr(self, 'trainset_combo'):
+                cur2 = self.trainset_path.get()
+                self.trainset_combo['values'] = tvals
+                if not cur2 and tvals:
+                    self.trainset_path.set(tvals[0])
+        except Exception:
+            pass
 
     def save_current_consist(self):
         """Save current_entries to a user-specified .con file (simple format)."""
@@ -1176,6 +1280,7 @@ class ConsistEditorGUI:
                 cur = self.store_subfolder_var.get() if hasattr(self, 'store_subfolder_var') else ''
                 if cur not in values:
                     self.store_subfolder_var.set('')
+                self.store_subfolder_cb.update_idletasks()
             except Exception:
                 pass
         except Exception as e:
@@ -1186,6 +1291,23 @@ class ConsistEditorGUI:
             self.load_store_items()
         except Exception as e:
             self.log_message(f'Error loading store items: {e}')
+
+    def _refresh_subfolder_values(self):
+        """Refresh subfolder combobox values just before dropdown opens (lightweight, no heavy scan)."""
+        try:
+            ts = self.trainset_path.get()
+            values = ['']
+            if ts:
+                ts_path = Path(ts)
+                if ts_path.exists():
+                    for child in sorted(ts_path.iterdir()):
+                        if child.is_dir():
+                            values.append(child.name)
+            
+            self.store_subfolder_cb['values'] = values
+            self.store_subfolder_cb.update_idletasks()
+        except Exception as e:
+            self.log_message(f'Error refreshing subfolder values: {e}')
 
     def _update_replace_combobox(self):
         """Update the replace combobox values from current filtered store_items."""

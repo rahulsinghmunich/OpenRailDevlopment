@@ -155,15 +155,33 @@ class ConsistEditorGUI:
         files_frame = ttk.LabelFrame(parent, text="Consist Files", padding="6")
         files_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         files_frame.columnconfigure(0, weight=1)
+        # Use a Treeview with a fixed width for the filename column so long names
+        # don't resize the whole file selection panel. Add a horizontal scrollbar
+        # so users can scroll long filenames instead of forcing layout changes.
         self.consist_files_tree = ttk.Treeview(files_frame)
+        # Primary text column (#0) shows the filename; keep it fixed width
         self.consist_files_tree.heading('#0', text='Consist File')
+        # Keep filename column at a fixed width and do not allow it to stretch
+        try:
+            self.consist_files_tree.column('#0', width=260, minwidth=120, stretch=False)
+        except Exception:
+            # Some ttk versions may not support minwidth; fallback to width only
+            try:
+                self.consist_files_tree.column('#0', width=260, stretch=False)
+            except Exception:
+                pass
+        # Missing count column
         self.consist_files_tree['columns'] = ('missing',)
         self.consist_files_tree.heading('missing', text='Missing')
-        self.consist_files_tree.column('missing', width=80, anchor=tk.CENTER)
+        self.consist_files_tree.column('missing', width=80, anchor=tk.CENTER, stretch=False)
+
+        # Place tree and scrollbars; reserve a horizontal scrollbar to avoid layout jumps
         self.consist_files_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        files_scroll = ttk.Scrollbar(files_frame, orient='vertical', command=self.consist_files_tree.yview)
-        self.consist_files_tree.configure(yscrollcommand=files_scroll.set)
-        files_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        files_vscroll = ttk.Scrollbar(files_frame, orient='vertical', command=self.consist_files_tree.yview)
+        files_vscroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        files_hscroll = ttk.Scrollbar(files_frame, orient='horizontal', command=self.consist_files_tree.xview)
+        files_hscroll.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.consist_files_tree.configure(yscrollcommand=files_vscroll.set, xscrollcommand=files_hscroll.set)
         self.consist_files_tree.bind('<<TreeviewSelect>>', self.on_consist_file_selected)
         self.consist_files_tree.tag_configure('missing', foreground=self.colors['missing'])
         self.consist_files_tree.tag_configure('no_missing', foreground=self.colors['existing'])
@@ -189,7 +207,9 @@ class ConsistEditorGUI:
 
         buttons_frame = ttk.Frame(parent); buttons_frame.grid(row=8, column=0, sticky=(tk.W, tk.E), pady=10)
         buttons_frame.columnconfigure(0, weight=1); buttons_frame.columnconfigure(1, weight=1)
-        self.resolve_button = ttk.Button(buttons_frame, text="Run Resolver", command=self.run_resolver, state='disabled')
+        # Use a fixed-width resolve button so changing its label (or filename) doesn't
+        # cause the surrounding layout to jump. Keep text short and stable.
+        self.resolve_button = ttk.Button(buttons_frame, text="Resolve Selected File", command=self.run_resolver, state='disabled', width=22)
         self.resolve_button.grid(row=0, column=0, padx=(0,5), pady=2, sticky=(tk.W, tk.E))
         self.refresh_button = ttk.Button(buttons_frame, text="Refresh View", command=self.refresh_consist_view)
         self.refresh_button.grid(row=0, column=1, padx=(5,0), pady=2, sticky=(tk.W, tk.E))
@@ -202,16 +222,49 @@ class ConsistEditorGUI:
         
         # Add progress bar for consist scanning
         self.consist_scan_progress_var = tk.DoubleVar(value=0.0)
-        self.consist_scan_progress = ttk.Progressbar(parent, orient='horizontal', length=400, mode='determinate', variable=self.consist_scan_progress_var)
+        # Create an orange progressbar style for consist scanning to match 'missing'/orange color
+        try:
+            s = ttk.Style()
+            s.configure('Orange.Horizontal.TProgressbar', background=self.colors.get('missing', '#FF9800'), troughcolor='#e6e6e6')
+            pb_style = 'Orange.Horizontal.TProgressbar'
+        except Exception:
+            pb_style = None
+        if pb_style:
+            # Use default progressbar length so it doesn't expand; style applied via pb_style
+            self.consist_scan_progress = ttk.Progressbar(parent, style=pb_style, orient='horizontal', mode='determinate', variable=self.consist_scan_progress_var)
+        else:
+            # Use default progressbar length so it doesn't expand
+            self.consist_scan_progress = ttk.Progressbar(parent, orient='horizontal', mode='determinate', variable=self.consist_scan_progress_var)
         self.consist_scan_progress_visible = False
         
         self.resolver_progress = ttk.Progressbar(parent, orient='horizontal', length=400, mode='determinate', variable=self.resolver_progress_var)
+        # Create a red style for the resolver progress bar (use 'unresolved' color)
+        try:
+            s2 = ttk.Style()
+            s2.configure('Red.Horizontal.TProgressbar', background=self.colors.get('unresolved', '#F44336'), troughcolor='#e6e6e6')
+            resolver_pb_style = 'Red.Horizontal.TProgressbar'
+        except Exception:
+            resolver_pb_style = None
+        if resolver_pb_style:
+            try:
+                # replace resolver_progress with styled progressbar
+                self.resolver_progress = ttk.Progressbar(parent, style=resolver_pb_style, orient='horizontal', length=400, mode='determinate', variable=self.resolver_progress_var)
+            except Exception:
+                pass
 
     def setup_consist_viewer(self, parent):
         columns = ('Type', 'Folder', 'Name', 'Status')
         self.consist_tree = ttk.Treeview(parent, columns=columns, show='headings', height=15)
+        # Make columns fixed-width (no stretch) so content doesn't resize the tree and shift layout
         for c, w in [('Type',80), ('Folder',200), ('Name',250), ('Status',100)]:
-            self.consist_tree.column(c, width=w, minwidth=max(60, w//2))
+            try:
+                self.consist_tree.column(c, width=w, minwidth=max(60, w//2), stretch=False)
+            except Exception:
+                # Some ttk versions may not accept minwidth/stretch; fallback to width only
+                try:
+                    self.consist_tree.column(c, width=w, stretch=False)
+                except Exception:
+                    self.consist_tree.column(c, width=w)
             self.consist_tree.heading(c, text=c)
         self.consist_tree.tag_configure('missing', foreground=self.colors['missing'])
         self.consist_tree.tag_configure('existing', foreground=self.colors['existing'])
@@ -1476,9 +1529,12 @@ class ConsistEditorGUI:
                     self.missing_text.insert(tk.END, 'Select a consist file to view missing items.')
                     self.missing_text.config(state='disabled')
                     return
-            
-            # Parse the file to get entries
-            entries = self.parse_consist_file(file_path)
+            # If the requested file is the currently loaded consist, reuse parsed entries
+            if hasattr(self, 'current_consist_file') and self.current_consist_file and str(file_path) == str(self.current_consist_file):
+                entries = list(self.current_entries)
+            else:
+                # Parse the file to get entries (only if not already cached)
+                entries = self.parse_consist_file(file_path)
             
             # Calculate missing items
             missing_items = []
@@ -1611,11 +1667,13 @@ class ConsistEditorGUI:
                         state, text = data
                         self.resolve_button.config(state=state, text=text)
                     elif msg_type == 'refresh':
-                        self.log_message("Processing refresh message")
-                        self.refresh_consist_view()
-                        # Also refresh the consist files list colors after resolution
-                        if self.consists_path.get():
-                            self.refresh_counts()
+                        # Backwards-compatible refresh message. Do a lightweight
+                        # refresh of the currently loaded consist viewer only.
+                        self.log_message("Processing refresh message (light): updating current consist viewer")
+                        try:
+                            self.refresh_consist_view()
+                        except Exception:
+                            pass
                     elif msg_type == 'resolver_progress_show':
                         try:
                             if not self.resolver_progress_visible:
@@ -1672,7 +1730,8 @@ class ConsistEditorGUI:
                                     self.consist_scan_progress.stop()
                                     pct = int((current / total) * 100)
                                     self.consist_scan_progress_var.set(pct)
-                            self.scan_status_label.config(text=f'Scanning consists... ({current}/{total}) {filename}')
+                            # Keep status message fixed so the UI doesn't reflow due to filename length
+                            self.scan_status_label.config(text=f'Scanning consist files... ({current}/{total})')
                         except Exception:
                             pass
                     elif msg_type == 'scan_done':
@@ -1843,12 +1902,43 @@ class ConsistEditorGUI:
                                 pass
                         except Exception:
                             pass
+                    elif msg_type == 'files_changed':
+                        # Targeted refresh: only refresh the specific files that
+                        # changed during resolver run to avoid full folder rescans.
+                        try:
+                            changed = data or []
+                            # Refresh missing count for each changed file
+                            for fp in changed:
+                                try:
+                                    self._refresh_single_file_missing_count(fp)
+                                except Exception:
+                                    pass
+
+                            # If the currently loaded file was among changed, refresh viewer
+                            try:
+                                cur = getattr(self, 'current_consist_file', None)
+                                if cur and any(str(cur) == str(p) for p in changed):
+                                    self.log_message(f"Current consist updated by resolver: {cur}")
+                                    # Re-analyze and update the missing-items display immediately
+                                    self.analyze_single_consist(str(cur))
+                                    try:
+                                        self.update_missing_items_display(str(cur))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            self.log_message(f"Error processing files_changed message: {e}")
                     elif msg_type == 'refresh_current_consist':
                         # Refresh the consist viewer for the currently loaded file (after resolver updates)
                         try:
                             if hasattr(self, 'current_consist_file') and self.current_consist_file:
                                 self.log_message(f"Refreshing consist viewer for updated file: {self.current_consist_file}")
                                 self.analyze_single_consist(self.current_consist_file)
+                                try:
+                                    self.update_missing_items_display(self.current_consist_file)
+                                except Exception:
+                                    pass
                         except Exception as e:
                             self.log_message(f"Error refreshing current consist after resolver: {e}")
                         
@@ -2034,6 +2124,11 @@ class ConsistEditorGUI:
                                 if hasattr(self, 'current_consist_file') and self.current_consist_file and str(self.current_consist_file) == str(original_consist_path):
                                     self.message_queue.put(('log', f"Refreshing consist viewer for updated file: {original_consist_path}"))
                                     self.message_queue.put(('refresh_current_consist', None))
+                                # Also enqueue a targeted files_changed message for the main thread
+                                try:
+                                    self.message_queue.put(('files_changed', [str(original_consist_path)]))
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 self.message_queue.put(('log', f"Error refreshing after resolver: {e}"))
                         else:
@@ -2102,6 +2197,20 @@ class ConsistEditorGUI:
                 self.message_queue.put(('log', f"ERROR: Resolver script not found: {self.resolver_script_path}"))
                 return
             
+            # Snapshot .con files mtimes before running resolver so we can detect
+            # which files change and avoid rescanning everything.
+            pre_mtimes = {}
+            try:
+                cd = Path(consists_dir)
+                if cd.exists():
+                    for p in cd.glob('*.con'):
+                        try:
+                            pre_mtimes[str(p)] = p.stat().st_mtime
+                        except Exception:
+                            pre_mtimes[str(p)] = None
+            except Exception:
+                pre_mtimes = {}
+
             self.message_queue.put(('log', f"Running resolver command: {' '.join(cmd)}"))
             self.message_queue.put(('log', "Resolver started..."))
             
@@ -2172,10 +2281,48 @@ class ConsistEditorGUI:
             # Hide progress bar
             self.message_queue.put(('resolver_progress_hide', None))
             
-            # Refresh view only if requested
+            # After resolver finishes, snapshot mtimes again and diff to find
+            # changed files. Send the list of changed files to the main thread
+            # so it can refresh only those entries (cheap, targeted update).
+            changed_files = []
+            try:
+                post_mtimes = {}
+                cd = Path(consists_dir)
+                if cd.exists():
+                    for p in cd.glob('*.con'):
+                        try:
+                            post_mtimes[str(p)] = p.stat().st_mtime
+                        except Exception:
+                            post_mtimes[str(p)] = None
+
+                # Detect added/modified/removed
+                all_paths = set(pre_mtimes.keys()) | set(post_mtimes.keys())
+                for path in all_paths:
+                    pre = pre_mtimes.get(path)
+                    post = post_mtimes.get(path)
+                    if pre != post:
+                        # Changed, added or removed -> include for refresh
+                        # Only include files that currently exist (we refresh present files).
+                        if post is not None and Path(path).exists():
+                            changed_files.append(path)
+                        else:
+                            # If file was removed, still attempt to update tree item
+                            changed_files.append(path)
+            except Exception as e:
+                self.message_queue.put(('log', f"Error determining changed files: {e}"))
+
+            # Send changed files list to main thread for targeted refresh
             if refresh_after:
-                self.message_queue.put(('refresh', None))
-                self.log_message("Refresh message sent to message queue")
+                try:
+                    if changed_files:
+                        self.message_queue.put(('files_changed', changed_files))
+                        self.log_message(f"Files changed: {len(changed_files)} -> queued targeted refresh")
+                    else:
+                        # Fallback: if nothing changed, still ask to refresh current file only
+                        self.message_queue.put(('refresh_current_consist', None))
+                        self.log_message("No changed files detected; doing light refresh of current consist")
+                except Exception:
+                    pass
             else:
                 self.log_message("Refresh skipped (refresh_after=False)")
             
@@ -2240,6 +2387,15 @@ class ConsistEditorGUI:
                     self.log_message(f"Updated missing count for {Path(file_path).name}: {display_missing} (tag: {tag})")
                 else:
                     self.log_message(f"Tree item not found for: {file_path_str}")
+                # If this refreshed file is the currently loaded consist, also update the missing-items panel
+                try:
+                    if hasattr(self, 'current_consist_file') and self.current_consist_file and str(self.current_consist_file) == str(file_path):
+                        try:
+                            self.update_missing_items_display(file_path)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             except Exception as e:
                 self.log_message(f"Error updating tree item for {file_path}: {e}")
                 
@@ -2251,16 +2407,12 @@ class ConsistEditorGUI:
         try:
             mode = self.resolve_mode_var.get()
             if mode == 'selected':
-                selected_file = self._get_selected_consist_file()
-                if selected_file:
-                    file_name = Path(selected_file).name
-                    self.resolve_button.config(text=f"Resolve: {file_name}")
-                else:
-                    self.resolve_button.config(text="Resolve Selected File")
+                # Keep the button text stable to avoid layout changes; do not embed filename
+                self.resolve_button.config(text="Resolve Selected File")
             else:
                 self.resolve_button.config(text="Resolve All Files")
         except Exception:
-            self.resolve_button.config(text="Run Resolver")
+            self.resolve_button.config(text="Resolve Selected File")
     
     def on_consist_file_selected(self, event=None):
         """Handle selection of a consist file from the tree"""
@@ -2274,7 +2426,9 @@ class ConsistEditorGUI:
                 file_path = sel[0]
                 # Analyze and populate main consist view
                 try:
-                    self.analyze_single_consist(file_path)
+                    # If this file is already the current loaded file, skip re-analysis
+                    if not (hasattr(self, 'current_consist_file') and self.current_consist_file and str(self.current_consist_file) == str(file_path)):
+                        self.analyze_single_consist(file_path)
                 except Exception as e:
                     self.log_message(f"Error analyzing selected consist: {e}")
                 

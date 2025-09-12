@@ -2528,6 +2528,36 @@ def rank_by_name_then_tokens(
         folder_norm = re.sub(r"[^a-z0-9]+", " ", wanted_folder.lower()).strip()
         wanted_tokens.update(folder_norm.split())
 
+    # Detect token conflicts: both passenger-class indicators and generator indicators present
+    # Passenger-class tokens (coaches, reserved classes).
+    # Keep this limited to tokens already used in the codebase.
+    passenger_tokens = {
+        'cc', '1a', '2a', '3a', 'sl', 'sc', 'gs', '2s', 'accc', 'fc'
+    }
+
+    # Non-passenger / auxiliary tokens (generator cars, EOG, pantry etc.).
+    # Move 'pc' and 'slr' here as requested and avoid inventing new token names.
+    non_passenger_tokens = {'gc', 'eog', 'gen', 'gene', 'gn', 'pc', 'slr', 'pantry', 'generator', 'power', 'nmgc', 'drivingcar', 'brake', 'bvcm', 'bvzi', 'bvzc'}
+
+    wanted_has_passenger = bool(wanted_tokens & passenger_tokens)
+    wanted_has_non_passenger = bool(wanted_tokens & non_passenger_tokens)
+
+    # If both passenger and non-passenger indicators appear, prefer non-passenger assets
+    prefer_non_passenger = wanted_has_passenger and wanted_has_non_passenger
+
+    # Strict rule: if the wanted name explicitly contains generator-like tokens
+    # (gc, eog, gen, gene), we should NOT match to passenger-class assets (like CC).
+    wanted_has_generator_tokens = bool(wanted_tokens & {'gc', 'eog', 'gen', 'gene'})
+
+    # If conflict present, treat the wanted class as non-passenger: clear klass so
+    # passenger-class exact matches and bonuses are suppressed.
+    if prefer_non_passenger:
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.debug(
+                f"PREFERRED_NON_PASSENGER: Wanted '{wanted_name}' contains both passenger and non-passenger tokens; treating wanted class as non-passenger (suppressing passenger-class bonuses)"
+            )
+        klass = ''
+
     scored_candidates = []
 
     for asset in pool:
@@ -2604,6 +2634,59 @@ def rank_by_name_then_tokens(
                     score += 100
             else:
                 score += 150
+
+        # Special handling: if the wanted name contains both passenger-class tokens and
+        # non-passenger indicators (e.g., 'cc' and 'gc' or 'pantry'), prefer candidate
+        # assets that look like auxiliary/non-passenger cars (EOG, Pantry, Power).
+        if prefer_non_passenger:
+            asset_tokens_lower = set(t.lower() for t in getattr(asset, 'cached_tokens', set()))
+            asset_name_lower = (asset.name or '').lower()
+            asset_folder_lower = (asset.folder or '').lower()
+
+            # Detect if asset looks like generator/pantry/power car
+            asset_is_aux = (
+                (asset.cached_class and asset.cached_class.upper() in ('EOG', 'GN', 'PC', 'SLR'))
+                or bool(asset_tokens_lower & non_passenger_tokens)
+                or re.search(r'(?i)\b(gc|eog|gen|gene|pantry|power|pantrycar|powercar|generator)\b', asset_name_lower)
+                or re.search(r'(?i)\b(gc|eog|gen|gene|pantry|power|pantrycar|powercar|generator)\b', asset_folder_lower)
+            )
+
+            if asset_is_aux:
+                # Strong boost so auxiliary cars are preferred in conflict cases
+                score += 500
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug(
+                        f"AUX-PREFERENCE: Boosting asset {asset.folder}/{asset.name} for wanted='{wanted_name}' (aux indicator present)"
+                    )
+            else:
+                # Slight penalty for obvious passenger-class candidates to de-prioritize them
+                if asset.cached_class and asset.cached_class.upper() in {c.upper() for c in passenger_tokens}:
+                    score -= 250
+
+        # Enforce strict GC -> not-CC rule: if the wanted name looks like a generator
+        # (contains generator tokens), penalize passenger-class assets strongly so they
+        # are effectively never selected for generator wants.
+        if wanted_has_generator_tokens:
+            if asset.cached_class and asset.cached_class.upper() in {c.upper() for c in passenger_tokens}:
+                # Heavy penalty to prevent CC being selected when GC is requested
+                score -= 2000
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug(
+                        f"GENERATOR-STRICT: Penalizing passenger asset {asset.folder}/{asset.name} for wanted='{wanted_name}' (generator token present)"
+                    )
+
+        # Prefer passenger-only assets when wanted has no non-passenger tokens
+        if not wanted_has_non_passenger:
+            asset_has_non_passenger = (
+                bool(getattr(asset, 'cached_tokens', set()) & non_passenger_tokens)
+                or re.search(r'(?i)\b(gc|eog|gen|gene|pantry|power|pantrycar|powercar|generator|brake|bvcm|bvzi|bvzc)\b', (asset.name or '').lower())
+            )
+            if asset_has_non_passenger:
+                score -= 1000  # Penalize assets with non-passenger tokens when wanted has none
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug(
+                        f"PASSENGER-PREFERENCE: Penalizing non-passenger asset {asset.folder}/{asset.name} for wanted='{wanted_name}' (wanted has no non-passenger tokens)"
+                    )
 
         # Non-defaults bonus
         if not asset.folder.lower().startswith("_defaults"):

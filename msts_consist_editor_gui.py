@@ -40,6 +40,7 @@ class ConsistEditorGUI:
         self.store_search_var = tk.StringVar()
         self._store_cache = None
         self._store_cache_trainset = None
+        self._previous_trainset_path = None  # Track previous trainset path
 
         self.resolver_script_path = None
         self.current_consist_file = None
@@ -47,6 +48,8 @@ class ConsistEditorGUI:
 
         self.resolver_progress_var = tk.DoubleVar(value=0.0)
         self.resolver_progress_visible = False
+        self.store_progress_var = tk.DoubleVar(value=0.0)
+        self._store_progress_visible = False
         self.message_queue = queue.Queue()
         self._consist_errors: Dict[str,str] = {}
         self._tooltip_window = None
@@ -207,7 +210,8 @@ class ConsistEditorGUI:
         self.consist_filter_cb.bind('<<ComboboxSelected>>', lambda e: self._apply_consist_filter())
         # Small status label to show number visible / total
         self.consist_filter_status_var = tk.StringVar(value='')
-        self.consist_filter_status = ttk.Label(load_frame, textvariable=self.consist_filter_status_var)
+        # Fixed width label so changes in the counter don't resize the panel
+        self.consist_filter_status = ttk.Label(load_frame, textvariable=self.consist_filter_status_var, width=18)
         self.consist_filter_status.grid(row=0, column=3, sticky=tk.W, padx=(8,0))
 
         files_frame = ttk.LabelFrame(parent, text="Consist Files", padding="6")
@@ -361,10 +365,15 @@ class ConsistEditorGUI:
         self.store_subfolder_cb = ttk.Combobox(stores_frame, textvariable=self.store_subfolder_var, values=[''], state='readonly', width=20)
         self.store_subfolder_cb.grid(row=0, column=2, padx=(6,0), pady=(0,6))
         self.store_subfolder_cb.bind('<<ComboboxSelected>>', lambda e: self.load_store_items())
-        self.store_subfolder_cb.configure(postcommand=self._refresh_subfolder_values)
+        self.store_subfolder_cb.configure(postcommand=self.update_store_subfolders)
         self.store_subfolder_cb.bind("<Button-1>", lambda e: self.store_subfolder_cb.event_generate("<Down>") if self.store_subfolder_cb['state'] == 'readonly' else None)
 
-        ttk.Checkbutton(stores_frame, text='Scan all top-level subfolders', variable=self.scan_all_subfolders_var, command=self.load_store_items).grid(row=0, column=3, padx=(6,0))
+        ttk.Checkbutton(stores_frame, text='Scan all top-level subfolders', variable=self.scan_all_subfolders_var, 
+                        command=lambda: (self.load_store_items(), self._update_folder_dropdown_state())).grid(row=0, column=3, padx=(6,0))
+
+        # Add explanatory text for folder dropdown - directly below the checkbox
+        ttk.Label(stores_frame, text='(Folder selection only works when unchecked)', 
+                 font=('', 8), foreground='green').grid(row=1, column=3, sticky=tk.W, pady=(0,6))
 
         store_filter = ttk.Combobox(stores_frame, textvariable=self.store_filter_var, values=['All','Engines','Wagons'], state='readonly', width=12)
         store_filter.grid(row=0, column=0, columnspan=2, pady=(0,6))
@@ -395,10 +404,23 @@ class ConsistEditorGUI:
         ttk.Button(stores_frame, text='Refresh Stores', command=self._refresh_store_cache).grid(row=6, column=0, columnspan=2, pady=(8,0))
 
         self.store_scan_label_var = tk.StringVar(value='')
-        ttk.Label(stores_frame, textvariable=self.store_scan_label_var).grid(row=15, column=0, columnspan=3, pady=(6,0))
+        ttk.Label(stores_frame, textvariable=self.store_scan_label_var, width=30).grid(row=15, column=0, columnspan=3, pady=(6,0))
 
-        self.store_progress_var = tk.DoubleVar(value=0.0)
-        self.store_progress = ttk.Progressbar(stores_frame, orient='horizontal', length=200, mode='determinate', variable=self.store_progress_var)
+        # Add progress bar for store scanning with purple style
+        try:
+            s = ttk.Style()
+            s.configure('Purple.Horizontal.TProgressbar', background='#800080', troughcolor='#e6e6e6')
+            store_pb_style = 'Purple.Horizontal.TProgressbar'
+        except Exception:
+            store_pb_style = None
+        try:
+            self.store_progress = ttk.Progressbar(stores_frame, style='Purple.Horizontal.TProgressbar', orient='horizontal', length=200, mode='determinate', variable=self.store_progress_var)
+        except Exception:
+            # Fallback if style doesn't exist
+            self.store_progress = ttk.Progressbar(stores_frame, orient='horizontal', length=200, mode='determinate', variable=self.store_progress_var)
+        # Initially hide the progress bar
+        self.store_progress.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=20)
+        self.store_progress.place_forget()
         self._store_progress_visible = False
 
         ttk.Label(stores_frame, text='Num to add:').grid(row=4, column=0, sticky=tk.W, pady=(6,0))
@@ -431,6 +453,12 @@ class ConsistEditorGUI:
         try:
             self.load_store_items()
             self.update_store_subfolders()
+        except Exception:
+            pass
+
+        # Initialize folder dropdown state based on checkbox
+        try:
+            self._update_folder_dropdown_state()
         except Exception:
             pass
 
@@ -596,9 +624,9 @@ class ConsistEditorGUI:
                         continue
                 except Exception:
                     pass
-                # Send progress update for large scans
-                if total_files > 20:  # Only show detailed progress for very large scans
-                    self.message_queue.put(('consist_scan_progress', (i, total_files, cf.name)))
+                # Send progress update for large scans (every 10 files to reduce overhead)
+                if total_files > 20 and (i % 10 == 0 or i == total_files):  # Only show detailed progress for very large scans
+                    self.message_queue.put(('consist_scan_progress', (i, total_files)))
                 
                 missing_count = 0
                 err = None
@@ -1192,6 +1220,11 @@ class ConsistEditorGUI:
         ts = self.trainset_path.get()
         if ts:
             try:
+                # Check if trainset path has changed - if so, clear cache
+                if self._previous_trainset_path != ts:
+                    self._clear_store_cache()
+                    self._previous_trainset_path = ts
+
                 # Determine selected immediate subfolder (may be empty)
                 sub = ''
                 try:
@@ -1313,6 +1346,150 @@ class ConsistEditorGUI:
         except Exception:
             pass
 
+    def _load_store_items_bg(self, ts, store_filter, cache_key):
+        """Background method to load store items from all subfolders."""
+        try:
+            # Update progress bar to show scanning is in progress
+            self.root.after(0, lambda: self.store_progress_var.set(10))
+
+            ts_path = Path(ts)
+            patterns = []
+            if store_filter in ('All', 'Engines'):
+                patterns.append('*.eng')
+            if store_filter in ('All', 'Wagons'):
+                patterns.append('*.wag')
+
+            temp_items = []
+            total_dirs = 0
+            processed_dirs = 0
+
+            # Count total directories for progress
+            for child in ts_path.iterdir():
+                if child.is_dir():
+                    total_dirs += 1
+
+            # Update progress bar
+            self.root.after(0, lambda: self.store_progress_var.set(20))
+
+            # Scan all subdirectories
+            for child in sorted(ts_path.iterdir()):
+                if not child.is_dir():
+                    continue
+
+                processed_dirs += 1
+                progress = 20 + (processed_dirs / total_dirs) * 70 if total_dirs > 0 else 20
+                self.root.after(0, lambda p=progress: self.store_progress_var.set(p))
+
+                for pat in patterns:
+                    for p in child.glob(pat):
+                        if p.parent != child:
+                            continue
+                        rel = p.relative_to(ts_path)
+                        folder = str(rel.parent).replace('\\', '/') if rel.parent != Path('.') else ''
+                        name = p.stem
+                        ext = p.suffix.lstrip('.')
+                        display = f"{folder}/{name}.{ext}" if folder else f"{name}.{ext}"
+                        item = {'display': display, 'folder': folder, 'name': name, 'extension': ext}
+                        temp_items.append(item)
+
+            # Update progress to 90%
+            self.root.after(0, lambda: self.store_progress_var.set(90))
+
+            # Update the main thread with results
+            self.root.after(0, lambda: self._finish_bg_store_load(temp_items, cache_key))
+
+        except Exception as e:
+            # Handle errors in background thread
+            self.root.after(0, lambda: self._handle_bg_store_error(str(e)))
+
+    def _finish_bg_store_load(self, items, cache_key):
+        """Finish background store loading by updating UI with results."""
+        try:
+            self.store_items = items
+
+            # Cache results
+            self._store_cache = list(self.store_items)
+            self._store_cache_trainset = cache_key
+
+            # Update progress to 100%
+            self.store_progress_var.set(100)
+
+            # Initialize filtered items and populate listbox
+            self.filtered_store_items = self.store_items
+            self._filter_store_items()
+            self._update_replace_combobox()
+
+            # Update message label
+            if not self.store_items:
+                self.store_message_label.config(text='No assets found in the selected trainset.')
+            else:
+                self.store_message_label.config(text='')
+
+            # Clear scanning message
+            if hasattr(self, 'store_scan_label_var'):
+                self.store_scan_label_var.set('')
+
+            # Reset progress after a short delay
+            self.root.after(1000, lambda: [self.store_progress_var.set(0), self._hide_store_progress()])
+
+        except Exception as e:
+            self._handle_bg_store_error(str(e))
+
+    def _handle_bg_store_error(self, error_msg):
+        """Handle errors that occur during background store loading."""
+        try:
+            self.store_progress_var.set(0)
+            if hasattr(self, 'store_scan_label_var'):
+                self.store_scan_label_var.set('')
+            self.store_message_label.config(text=f'Error scanning trainset: {error_msg}')
+        except Exception:
+            pass
+
+    def _clear_store_cache(self):
+        """Completely clear the store cache - use when trainset changes or major updates needed."""
+        try:
+            self._store_cache = None
+            self._store_cache_trainset = None
+            self.store_items = []
+            self.filtered_store_items = []
+            # Clear the listbox
+            try:
+                self.store_listbox.delete(0, tk.END)
+            except Exception:
+                pass
+            # Update combobox
+            try:
+                self._update_replace_combobox()
+            except Exception:
+                pass
+            self.log_message('Store cache cleared')
+        except Exception as e:
+            self.log_message(f'Error clearing store cache: {e}')
+
+    def _update_folder_dropdown_state(self):
+        """Enable/disable folder dropdown based on scan_all_subfolders checkbox state."""
+        try:
+            if hasattr(self, 'scan_all_subfolders_var') and hasattr(self, 'store_subfolder_cb'):
+                scan_all = bool(self.scan_all_subfolders_var.get())
+                if scan_all:
+                    self.store_subfolder_cb.config(state='disabled')
+                    self.store_subfolder_var.set('')
+                else:
+                    self.store_subfolder_cb.config(state='readonly')
+                    # Refresh subfolder list when enabling
+                    self.update_store_subfolders()
+        except Exception as e:
+            print(f"Error updating folder dropdown state: {e}")
+
+    def _hide_store_progress(self):
+        """Hide the store progress bar smoothly without layout shifts."""
+        try:
+            if self._store_progress_visible:
+                self.store_progress.place_forget()
+                self._store_progress_visible = False
+        except Exception:
+            pass
+
     def _filter_store_items(self):
         """Filter store items based on search text and update the listbox."""
         search_text = self.store_search_var.get().lower().strip()
@@ -1355,6 +1532,30 @@ class ConsistEditorGUI:
             self._update_replace_combobox()
         except Exception:
             pass
+
+    def _update_replace_combobox(self):
+        """Update the replace combobox values from current filtered store_items."""
+        try:
+            if not hasattr(self, 'store_replace_cb') or not self.store_replace_cb:
+                return
+                
+            vals = [it['display'] for it in self.filtered_store_items]
+            self.store_replace_cb['values'] = vals
+            if vals:
+                self.store_replace_var.set(vals[0])
+            else:
+                self.store_replace_var.set('')
+                self.store_replace_cb['values'] = ['(No items available)']
+            # Force UI update
+            self.root.update_idletasks()
+        except Exception as e:
+            print(f"Error updating replace combobox: {e}")
+            try:
+                self.store_replace_cb['values'] = ['(Error loading items)']
+                self.store_replace_var.set('')
+                self.root.update_idletasks()
+            except Exception:
+                pass
 
     def _load_store_items_bg(self, ts, store_filter, cache_key):
         """Background worker to scan immediate subfolders (top-level only) and report progress.
@@ -1403,16 +1604,19 @@ class ConsistEditorGUI:
                     items.append({'display': display, 'folder': folder, 'name': name, 'extension': ext})
 
                     processed_files += 1
-                    # Post per-file progress update including current filename
-                    try:
-                        self.message_queue.put(('store_scan_progress', (processed_files, total_files, display)))
-                    except Exception:
-                        pass
+                    # Post progress update every 10 files to reduce message overhead
+                    if processed_files % 10 == 0 or processed_files == total_files:
+                        try:
+                            self.message_queue.put(('store_scan_progress', (processed_files, total_files)))
+                        except Exception:
+                            pass
                 except Exception:
                     # still count as processed to avoid stalling progress
                     try:
                         processed_files += 1
-                        self.message_queue.put(('store_scan_progress', (processed_files, total_files, '')))
+                        # Post progress update every 10 files to reduce message overhead
+                        if processed_files % 10 == 0 or processed_files == total_files:
+                            self.message_queue.put(('store_scan_progress', (processed_files, total_files)))
                     except Exception:
                         pass
 
@@ -1475,46 +1679,30 @@ class ConsistEditorGUI:
         except Exception as e:
             self.log_message(f'Error loading store items: {e}')
 
-    def _refresh_subfolder_values(self):
-        """Refresh subfolder combobox values just before dropdown opens (lightweight, no heavy scan)."""
+    def _refresh_store_cache(self):
+        """Clear store cache and reload items from trainset immediately."""
         try:
-            ts = self.trainset_path.get()
-            values = ['']
-            if ts:
-                ts_path = Path(ts)
-                if ts_path.exists():
-                    for child in sorted(ts_path.iterdir()):
-                        if child.is_dir():
-                            values.append(child.name)
-            
-            self.store_subfolder_cb['values'] = values
-            self.store_subfolder_cb.update_idletasks()
+            # Clear the cache key to force rescan, but keep the cached data as backup
+            # This allows quick fallback if the rescan fails
+            self._store_cache_trainset = None
+            self.load_store_items()
+            self.log_message('Store cache refreshed - rescanning trainset')
         except Exception as e:
-            self.log_message(f'Error refreshing subfolder values: {e}')
-
-    def _update_replace_combobox(self):
-        """Update the replace combobox values from current filtered store_items."""
-        try:
-            if not hasattr(self, 'store_replace_cb') or not self.store_replace_cb:
-                return
-                
-            vals = [it['display'] for it in self.filtered_store_items]
-            self.store_replace_cb['values'] = vals
-            if vals:
-                self.store_replace_var.set(vals[0])
-            else:
-                self.store_replace_var.set('')
-                self.store_replace_cb['values'] = ['(No items available)']
-            # Force UI update
-            self.root.update_idletasks()
-        except Exception as e:
-            print(f"Error updating replace combobox: {e}")
-            try:
-                self.store_replace_cb['values'] = ['(Error loading items)']
-                self.store_replace_var.set('')
-                self.root.update_idletasks()
-            except Exception:
-                pass
+            self.log_message(f'Error refreshing store cache: {e}')
+            # If refresh fails, try to restore the cache key if we have cached data
+            if self._store_cache:
+                try:
+                    # Try to reconstruct the cache key from current settings
+                    ts = self.trainset_path.get()
+                    if ts:
+                        sub = self.store_subfolder_var.get() if hasattr(self, 'store_subfolder_var') else ''
+                        store_filter = self.store_filter_var.get() if hasattr(self, 'store_filter_var') else 'All'
+                        scan_all = bool(self.scan_all_subfolders_var.get()) if hasattr(self, 'scan_all_subfolders_var') else False
+                        cache_key = f"{ts}::{sub}::all={int(scan_all)}::filter={store_filter}"
+                        self._store_cache_trainset = cache_key
+                        self.log_message('Restored store cache after refresh failure')
+                except Exception:
+                    pass
 
     def move_selected_up(self):
         """Move the selected entry up by one position."""
@@ -1926,9 +2114,9 @@ class ConsistEditorGUI:
             total_files = len(files)
             
             for i, cf in enumerate(files, 1):
-                # Send progress update for large scans
-                if total_files > 20:  # Only show detailed progress for very large scans
-                    self.message_queue.put(('consist_scan_progress', (i, total_files, cf.name)))
+                # Send progress update for large scans (every 10 files to reduce overhead)
+                if total_files > 20 and (i % 10 == 0 or i == total_files):  # Only show detailed progress for very large scans
+                    self.message_queue.put(('consist_scan_progress', (i, total_files)))
                 
                 missing_count = 0
                 err = None
@@ -1962,9 +2150,14 @@ class ConsistEditorGUI:
             return
         
         try:
-            while True:
+            # Process up to 10 messages at a time to avoid blocking the UI
+            messages_processed = 0
+            max_messages_per_batch = 10
+            
+            while messages_processed < max_messages_per_batch:
                 try:
                     msg_type, data = self.message_queue.get_nowait()
+                    messages_processed += 1
                     
                     if msg_type == 'log':
                         self.log_message(data)
@@ -2024,7 +2217,7 @@ class ConsistEditorGUI:
                     elif msg_type == 'consist_scan_progress':
                         # Update progress for large consist scans
                         try:
-                            current, total, filename = data
+                            current, total = data
                             if total > 0:
                                 # Only show progress bar for very large scans
                                 if total > 20 and hasattr(self, 'consist_scan_progress'):
@@ -2036,7 +2229,7 @@ class ConsistEditorGUI:
                                     pct = int((current / total) * 100)
                                     self.consist_scan_progress_var.set(pct)
                             # Keep status message fixed so the UI doesn't reflow due to filename length
-                            self.scan_status_label.config(text=f'Scanning consist files... ({current}/{total})')
+                            self.scan_status_label.config(text=f'Scanning... ({current}/{total})')
                         except Exception:
                             pass
                     elif msg_type == 'scan_done':
@@ -2064,31 +2257,30 @@ class ConsistEditorGUI:
                                 self._last_consist_scan_results = list(results)
                             # populate tree according to current filter
                             self._populate_consist_files_tree()
+                            # Force GUI update
+                            try:
+                                self.root.update()
+                            except Exception:
+                                pass
                         except Exception as e:
                             self.log_message(f"Error updating consist files list: {e}")
                     elif msg_type == 'store_scan_progress':
                         if not self._store_progress_visible:
                             self._store_progress_visible = True
-                            self.store_progress.grid()  # show in its reserved cell
+                            try:
+                                # Ensure progress bar is properly positioned with fixed size
+                                self.store_progress.place(relx=0, rely=1.0, anchor='sw', relwidth=1.0, height=20)
+                            except Exception:
+                                pass
                         try:
-                            # data may be (processed, total) or (processed, total, filename)
+                            # data is (processed, total)
                             if isinstance(data, (list, tuple)) and len(data) >= 2:
                                 processed = data[0]
                                 total = data[1]
-                                current_name = data[2] if len(data) > 2 else ''
                             else:
                                 processed = 0
                                 total = 0
-                                current_name = ''
 
-                            if not self._store_progress_visible:
-                                try:
-                                    # show progressbar at row 14, column 0, columnspan 3 to avoid overlap
-                                    self.store_progress.grid(row=14, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(6,0))
-                                    self.store_progress.grid_remove()  # keep geometry, hide it
-                                    self._store_progress_visible = False
-                                except Exception:
-                                    pass
                             try:
                                 # switch to determinate and update percent and label
                                 pct = int((processed / total) * 100) if total else 100
@@ -2100,18 +2292,20 @@ class ConsistEditorGUI:
                             except Exception:
                                 pass
                             try:
-                                # show current file in scan label if provided
-                                if hasattr(self, 'store_scan_label_var') and current_name:
-                                    self.store_scan_label_var.set(f"Scanning: {current_name} ({processed}/{total})")
+                                # Update status label with current progress
+                                self.store_scan_label_var.set(f'Scanning stores... ({processed}/{total})')
                             except Exception:
                                 pass
                         except Exception:
                             pass
                     elif msg_type == 'store_scan_done':
-                        if self._store_progress_visible:
+                        # Reset progress bar and hide it smoothly
+                        try:
                             self.store_progress_var.set(0)
-                            self.store_progress.grid_remove()  # hide but keep place
-                            self._store_progress_visible = False
+                            # Use after() to delay hiding for smoother transition
+                            self.root.after(500, lambda: self._hide_store_progress())
+                        except Exception:
+                            pass
                         try:
                             items, cache_key = data
                             try:
@@ -2159,106 +2353,46 @@ class ConsistEditorGUI:
                                     pass
                             except Exception:
                                 pass
-                            # hide/reset progressbar
+                            # Clear scanning label after a short delay
                             try:
-                                if self._store_progress_visible:
-                                    self.store_progress_var.set(0)
-                                    self.store_progress.grid_forget()
-                                    self._store_progress_visible = False
-                                # clear scanning label
-                                try:
-                                    if hasattr(self, 'store_scan_label_var'):
-                                        self.store_scan_label_var.set('')
-                                except Exception:
-                                    pass
+                                self.root.after(1000, lambda: self.store_scan_label_var.set(''))
                             except Exception:
                                 pass
                         except Exception:
                             pass
                     elif msg_type == 'files_changed':
-                        # Targeted refresh: only refresh the specific files that
-                        # changed during resolver run to avoid full folder rescans.
+                        # Offload recomputation to background worker to avoid blocking the UI
                         try:
                             changed = data or []
-                            # Refresh missing count for each changed file
-                            for fp in changed:
-                                try:
-                                    self._refresh_single_file_missing_count(fp)
-                                except Exception:
-                                    pass
-
-                            # If the currently loaded file was among changed, refresh viewer
+                            # Quick path: if current file is in changed set, ask main thread to refresh it
                             try:
                                 cur = getattr(self, 'current_consist_file', None)
-                                if cur and any(str(cur) == str(p) for p in changed):
+                                if cur and any(self._normalize_path(str(cur)) == self._normalize_path(str(p)) for p in changed):
                                     self.log_message(f"Current consist updated by resolver: {cur}")
-                                    # Re-analyze and update the missing-items display immediately
-                                    self.analyze_single_consist(str(cur))
-                                    try:
-                                        self.update_missing_items_display(str(cur))
-                                    except Exception:
-                                        pass
+                                    # Refresh current consist on main thread (lightweight)
+                                    self.message_queue.put(('refresh_current_consist', None))
                             except Exception:
                                 pass
-                        except Exception as e:
-                            self.log_message(f"Error processing files_changed message: {e}")
-                        # Recompute cached scan results for changed files and reapply current filter
-                        try:
+
+                            # Take a snapshot of current cache to pass to worker
                             try:
-                                cached = list(getattr(self, '_last_consist_scan_results', []) or [])
+                                cached_snapshot = list(getattr(self, '_last_consist_scan_results', []) or [])
                             except Exception:
-                                cached = []
-                            if changed:
-                                updated = []
-                                changed_set = set([str(p) for p in changed])
-                                # Build a lookup for existing cached entries
-                                cache_map = {str(p[0]): (p[1], p[2], p[3]) for p in cached}
-                                # For all paths mentioned in cache or changed_set, recompute if needed
-                                all_paths = set(list(cache_map.keys())) | changed_set
-                                for path in sorted(all_paths):
-                                    if path in changed_set:
-                                        # recompute missing_count and err
-                                        try:
-                                            missing_count = 0
-                                            err = None
-                                            try:
-                                                entries = self.parse_consist_file(path)
-                                                if self.trainset_path.get():
-                                                    trainset_path = Path(self.trainset_path.get())
-                                                    for e in entries:
-                                                        asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
-                                                        if not asset_path.exists():
-                                                            missing_count += 1
-                                            except Exception as ex:
-                                                missing_count = -1
-                                                err = str(ex)
-                                        except Exception:
-                                            missing_count = -1
-                                            err = 'Error computing missing count'
-                                        display_name = Path(path).name
-                                        updated.append((path, display_name, missing_count, err))
-                                    else:
-                                        # keep existing cache entry
-                                        try:
-                                            dname, mc, er = cache_map.get(path, (Path(path).name, None, None))
-                                            updated.append((path, dname, mc, er))
-                                        except Exception:
-                                            updated.append((path, Path(path).name, None, None))
-                                # Replace cache (deduplicated)
+                                cached_snapshot = []
+
+                            # Start background worker to recompute missing counts for changed files
+                            def _files_changed_bg(snapshot, changed_list):
                                 try:
-                                    self._last_consist_scan_results = self._dedupe_consist_scan_results(updated)
-                                except Exception:
+                                    self._files_changed_worker(snapshot, changed_list)
+                                except Exception as e:
                                     try:
-                                        self._last_consist_scan_results = updated
+                                        self.message_queue.put(('log', f"Error in files_changed worker: {e}"))
                                     except Exception:
                                         pass
-                                # Reapply filter/populate tree so items move in/out of filtered view
-                                try:
-                                    self._populate_consist_files_tree()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+
+                            threading.Thread(target=_files_changed_bg, args=(cached_snapshot, changed), daemon=True).start()
+                        except Exception as e:
+                            self.log_message(f"Error dispatching files_changed worker: {e}")
                     elif msg_type == 'refresh_current_consist':
                         # Refresh the consist viewer for the currently loaded file (after resolver updates)
                         try:
@@ -2274,11 +2408,20 @@ class ConsistEditorGUI:
                         
                 except queue.Empty:
                     break
+            
+            # If we processed the max batch size, schedule immediate processing of remaining messages
+            if messages_processed >= max_messages_per_batch:
+                self.root.after(10, self.process_messages)
+            else:
+                # Schedule next check
+                self.root.after(100, self.process_messages)
         except Exception as e:
-            print(f"Error processing messages: {e}")
-        
-        # Schedule next check
-        self.root.after(100, self.process_messages)
+            # Log error and reschedule
+            try:
+                self.log_message(f"Error in process_messages: {e}")
+            except Exception:
+                pass
+            self.root.after(100, self.process_messages)
     
     def log_message(self, message):
         """Add message to output area"""
@@ -2440,22 +2583,83 @@ class ConsistEditorGUI:
             except Exception:
                 pass
 
-            # Auto-select and analyze first consist (if any)
-            if first_iid:
-                try:
-                    self.consist_files_tree.selection_set(first_iid)
-                    self.analyze_single_consist(first_iid)
-                    # Update missing items display for the first file
-                    self.update_missing_items_display(first_iid)
-                except Exception:
-                    pass
+            # Preserve the user's current selection if possible; otherwise auto-select first item
+            try:
+                cur = getattr(self, 'current_consist_file', None)
+                norm_cur = None
+                if cur:
+                    try:
+                        norm_cur = self._normalize_path(str(cur))
+                    except Exception:
+                        norm_cur = str(cur)
 
-            # Update the showing counter (visible / total)
+                if norm_cur and self.consist_files_tree.exists(norm_cur):
+                    try:
+                        self.consist_files_tree.selection_set(norm_cur)
+                        # Re-analyze and update viewer for the current file so changes are visible
+                        self.analyze_single_consist(norm_cur)
+                        self.update_missing_items_display(norm_cur)
+                    except Exception:
+                        pass
+                elif first_iid:
+                    try:
+                        self.consist_files_tree.selection_set(first_iid)
+                        self.analyze_single_consist(first_iid)
+                        # Update missing items display for the first file
+                        self.update_missing_items_display(first_iid)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Update the showing counter (visible / total) with fixed width for alignment
             try:
                 total = len(results)
                 visible = len(self.consist_files_tree.get_children(''))
                 if hasattr(self, 'consist_filter_status_var'):
-                    self.consist_filter_status_var.set(f"Showing {visible} / {total}")
+                    try:
+                        # Determine digits needed for alignment based on total
+                        try:
+                            total_digits = max(1, len(str(int(total))))
+                        except Exception:
+                            total_digits = 4
+                        # Build formatted string with dynamic padding
+                        fmt = f"{{:>{total_digits}d}} / {{:>{total_digits}d}}"
+                        try:
+                            self.consist_filter_status_var.set(fmt.format(visible, total))
+                        except Exception:
+                            self.consist_filter_status_var.set(f"{visible} / {total}")
+                        # Set label width to accommodate the string plus prefix
+                        try:
+                            label_width = (total_digits * 2) + 3
+                            self.consist_filter_status.configure(width=label_width)
+                        except Exception:
+                            pass
+                        # Attempt monospace font and right alignment
+                        try:
+                            # Try multiple monospace fonts in order of preference
+                            fonts_to_try = ['Consolas', 'Courier New', 'Monaco', 'Menlo', 'DejaVu Sans Mono']
+                            font_set = False
+                            for font_name in fonts_to_try:
+                                try:
+                                    self.consist_filter_status.configure(font=(font_name, 9), anchor='e', justify='right')
+                                    font_set = True
+                                    break
+                                except Exception:
+                                    continue
+                            if not font_set:
+                                # Fallback to default font with right alignment
+                                self.consist_filter_status.configure(anchor='e', justify='right')
+                        except Exception:
+                            try:
+                                self.consist_filter_status.configure(anchor='e', justify='right')
+                            except Exception:
+                                pass
+                    except Exception:
+                        try:
+                            self.consist_filter_status_var.set(f"Showing {visible} / {total}")
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -2596,6 +2800,7 @@ class ConsistEditorGUI:
 
                 # After resolver returns, copy changed files back by comparing mtimes
                 try:
+                    files_to_update = set()
                     # For each file in temp_dir, if a resolved version exists, copy back to its original
                     for p in Path(temp_dir).glob('*.con'):
                         try:
@@ -2612,15 +2817,23 @@ class ConsistEditorGUI:
                             if return_code == 0:
                                 try:
                                     shutil.copy2(str(p), str(orig_path))
-                                    try:
-                                        # enqueue normalized path so cache keys match
-                                        self.message_queue.put(('files_changed', [str(self._normalize_path(orig_path))]))
-                                    except Exception:
-                                        pass
+                                    files_to_update.add(str(self._normalize_path(orig_path)))
                                 except Exception as e:
                                     self.message_queue.put(('log', f"Error copying resolved file {p} back to {orig_path}: {e}"))
                         except Exception as e:
                             self.message_queue.put(('log', f"Error processing resolved file {p}: {e}"))
+                    
+                    # Also include all visible files for re-checking (in case resolver made no changes)
+                    for iid in visible_iids:
+                        files_to_update.add(str(self._normalize_path(iid)))
+                    
+                    # Send one files_changed message with all files that need updating
+                    if files_to_update:
+                        try:
+                            self.message_queue.put(('files_changed', list(files_to_update)))
+                        except Exception:
+                            pass
+                                
                 except Exception as e:
                     self.message_queue.put(('log', f"Error during filtered copy-back: {e}"))
                 finally:
@@ -2701,6 +2914,119 @@ class ConsistEditorGUI:
                     threading.Thread(target=cleanup, daemon=True).start()
                 except Exception:
                     pass
+
+    def _files_changed_worker(self, cached_snapshot, changed_list):
+        """Background worker to recompute missing counts for changed files and update cache.
+
+        Posts a single 'consist_list_update' message with the updated, deduplicated results
+        so the main thread can re-populate the tree in one go.
+        """
+        try:
+            # Normalize inputs
+            try:
+                changed_set = set([self._normalize_path(p) for p in (changed_list or [])])
+            except Exception:
+                changed_set = set([str(p) for p in (changed_list or [])])
+
+            # Build lookup from snapshot
+            snapshot_map = {}
+            try:
+                for p, dname, mc, er in (cached_snapshot or []):
+                    try:
+                        key = self._normalize_path(p)
+                    except Exception:
+                        key = str(p)
+                    snapshot_map[key] = (dname, mc, er)
+            except Exception:
+                snapshot_map = {}
+
+            # Recompute entries for changed files
+            updated_results = []
+            all_keys = set(list(snapshot_map.keys())) | set(changed_set)
+            for key in sorted(all_keys):
+                if key in changed_set:
+                    # recompute missing count
+                    try:
+                        missing_count = 0
+                        err = None
+                        try:
+                            entries = self.parse_consist_file(key)
+                            if self.trainset_path.get():
+                                trainset_path = Path(self.trainset_path.get())
+                                for e in entries:
+                                    asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
+                                    if not asset_path.exists():
+                                        missing_count += 1
+                        except Exception as ex:
+                            missing_count = -1
+                            err = str(ex)
+                    except Exception:
+                        missing_count = -1
+                        err = 'Error computing missing count'
+                    display_name = Path(key).name
+                    updated_results.append((key, display_name, missing_count, err))
+                else:
+                    # keep existing
+                    try:
+                        dname, mc, er = snapshot_map.get(key, (Path(key).name, None, None))
+                        updated_results.append((key, dname, mc, er))
+                    except Exception:
+                        updated_results.append((key, Path(key).name, None, None))
+
+            # Deduplicate and post back to main thread
+            try:
+                deduped = self._dedupe_consist_scan_results(updated_results)
+            except Exception:
+                deduped = list(updated_results)
+
+            # Emit limited per-file debug logs to help trace persistent 'broken' state
+            try:
+                max_debug = 50
+                debug_lines = []
+                # Build a quick map of previous values for comparison
+                prev_map = {}
+                try:
+                    for p, dname, mc, er in (cached_snapshot or []):
+                        prev_map[self._normalize_path(p)] = (mc, er)
+                except Exception:
+                    prev_map = {}
+
+                count = 0
+                for p, dname, mc, er in deduped:
+                    if count >= max_debug:
+                        break
+                    prev = prev_map.get(self._normalize_path(p)) if prev_map else None
+                    if prev is None:
+                        debug_lines.append(f"NEW: {dname} -> missing={mc} err={bool(er)}")
+                    else:
+                        debug_lines.append(f"CHG: {dname} prev_missing={prev[0]} now_missing={mc} prev_err={bool(prev[1])} now_err={bool(er)}")
+                    count += 1
+                if debug_lines:
+                    try:
+                        self.message_queue.put(('log', f"FilesChanged debug (first {len(debug_lines)}):"))
+                        for l in debug_lines:
+                            self.message_queue.put(('log', l))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            try:
+                # Log counts for diagnostic visibility
+                changed_count = len(changed_set)
+                total_count = len(deduped)
+                try:
+                    self.message_queue.put(('log', f"Files changed processing complete: {changed_count} files recomputed, {total_count} total entries in cache"))
+                except Exception:
+                    pass
+                self.message_queue.put(('consist_list_update', deduped))
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                self.message_queue.put(('log', f"Error in files_changed_worker: {e}"))
+            except Exception:
+                pass
     
     def _run_resolver_thread(self, consists_dir, trainset_dir, refresh_after=True):
         """Run resolver in background thread"""

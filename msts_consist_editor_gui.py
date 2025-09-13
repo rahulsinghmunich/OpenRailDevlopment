@@ -56,6 +56,9 @@ class ConsistEditorGUI:
         if potential_script.exists():
             self.resolver_script_path = str(potential_script)
 
+        # Cache for last consist scan results so filter can be re-applied without re-scanning
+        self._last_consist_scan_results = []  # list of tuples (path_str, display_name, missing_count, err)
+
         self._detect_virtual_environment()
 
     def _detect_virtual_environment(self):
@@ -156,8 +159,17 @@ class ConsistEditorGUI:
 
         load_frame = ttk.Frame(parent); load_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
         load_frame.columnconfigure(0, weight=1)
+        load_frame.columnconfigure(1, weight=0)
+        load_frame.columnconfigure(2, weight=0)
         self.load_button = ttk.Button(load_frame, text="Load & Analyze Consists", command=self.load_and_analyze)
-        self.load_button.grid(row=0, column=0, pady=10)
+        self.load_button.grid(row=0, column=0, pady=10, sticky=(tk.W, tk.E))
+
+        # Consist file filter (All / Broken / No Error) - placed next to Load button for alignment
+        self.consist_filter_var = tk.StringVar(value='All')
+        ttk.Label(load_frame, text='Show:').grid(row=0, column=1, sticky=tk.W, padx=(6,4))
+        self.consist_filter_cb = ttk.Combobox(load_frame, textvariable=self.consist_filter_var, values=['All','Broken','No Error'], state='readonly', width=14)
+        self.consist_filter_cb.grid(row=0, column=2, sticky=tk.W)
+        self.consist_filter_cb.bind('<<ComboboxSelected>>', lambda e: self._apply_consist_filter())
 
         files_frame = ttk.LabelFrame(parent, text="Consist Files", padding="6")
         files_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
@@ -194,6 +206,7 @@ class ConsistEditorGUI:
         self.consist_files_tree.tag_configure('missing', foreground=self.colors['missing'])
         self.consist_files_tree.tag_configure('no_missing', foreground=self.colors['existing'])
         self.consist_files_tree.tag_configure('error', foreground='#A52A2A')
+
 
     def setup_controls(self, parent):
         ttk.Separator(parent, orient='horizontal').grid(row=6, column=0, sticky=(tk.W, tk.E), pady=20)
@@ -559,6 +572,7 @@ class ConsistEditorGUI:
                 results.append((str(cf), cf.name, missing_count, err))
 
             # Send results to main thread via message queue and signal scan done
+            # store results in message so main thread can cache and filter
             self.message_queue.put(('consist_list_update', results))
             self.message_queue.put(('scan_done', None))
 
@@ -1874,45 +1888,10 @@ class ConsistEditorGUI:
                         # data: list of tuples (path_str, display_name, missing_count, err)
                         results = data
                         try:
-                            # clear existing
-                            self.consist_files_tree.delete(*self.consist_files_tree.get_children())
-                            first_iid = None
-                            # reset errors map
-                            self._consist_errors.clear()
-                            for path_str, display_name, missing_count, err in results:
-                                # store error detail if available
-                                if err:
-                                    self._consist_errors[path_str] = err
-
-                                # display friendly status for error sentinel
-                                display_missing = missing_count if not (isinstance(missing_count, int) and missing_count == -1) else 'ERR'
-                                if display_missing == 'ERR':
-                                    tag = 'error'
-                                else:
-                                    tag = 'missing' if (isinstance(missing_count, int) and missing_count > 0) else 'no_missing'
-
-                                self.consist_files_tree.insert('', 'end', iid=path_str, values=(display_missing,), text=display_name, tags=(tag,))
-                                if first_iid is None:
-                                    first_iid = path_str
-
-                            # configure tag colors
-                            self.consist_files_tree.tag_configure('missing', foreground=self.colors['missing'])
-                            self.consist_files_tree.tag_configure('no_missing', foreground=self.colors['existing'])
-                            self.consist_files_tree.tag_configure('error', foreground='#A52A2A')
-
-                            # bind tooltip events for error items
-                            self.consist_files_tree.bind('<Motion>', self._on_tree_motion)
-                            self.consist_files_tree.bind('<Leave>', self._hide_tooltip)
-
-                            # Auto-select and analyze first consist
-                            if first_iid:
-                                try:
-                                    self.consist_files_tree.selection_set(first_iid)
-                                    self.analyze_single_consist(first_iid)
-                                    # Update missing items display for the first file
-                                    self.update_missing_items_display(first_iid)
-                                except Exception:
-                                    pass
+                            # cache results so the filter can be re-applied without re-scanning
+                            self._last_consist_scan_results = list(results)
+                            # populate tree according to current filter
+                            self._populate_consist_files_tree()
                         except Exception as e:
                             self.log_message(f"Error updating consist files list: {e}")
                     elif msg_type == 'store_scan_progress':
@@ -2137,6 +2116,98 @@ class ConsistEditorGUI:
                 self._tooltip_window = None
         except Exception:
             pass
+
+    def _apply_consist_filter(self):
+        """Called when the consist filter combobox changes; re-populate the tree from cached scan results."""
+        try:
+            self._populate_consist_files_tree()
+        except Exception as e:
+            self.log_message(f"Error applying consist filter: {e}")
+    def _populate_consist_files_tree(self):
+        """Populate the consist_files_tree using the cached _last_consist_scan_results and the selected filter.
+
+        Filter options:
+          - All: show everything
+          - Broken: show only items with errors or missing assets (err != None OR missing_count > 0 OR missing_count == -1)
+          - No Error: show only items without errors and with zero missing assets (err is None AND missing_count == 0)
+        """
+        try:
+            results = list(getattr(self, '_last_consist_scan_results', []) or [])
+
+            # clear existing
+            try:
+                self.consist_files_tree.delete(*self.consist_files_tree.get_children())
+            except Exception:
+                for item in self.consist_files_tree.get_children():
+                    try:
+                        self.consist_files_tree.delete(item)
+                    except Exception:
+                        pass
+
+            first_iid = None
+            self._consist_errors.clear()
+
+            filt = (self.consist_filter_var.get() if hasattr(self, 'consist_filter_var') else 'All')
+
+            for path_str, display_name, missing_count, err in results:
+                # decide whether this file is considered 'broken'
+                # broken if there was a parse/io error (err), or missing_count indicates missing assets (>0),
+                # or the worker used -1 to indicate an error when counting
+                is_broken = bool(err) or (isinstance(missing_count, int) and (missing_count > 0 or missing_count == -1))
+                if filt == 'Broken' and not is_broken:
+                    continue
+                if filt == 'No Error' and is_broken:
+                    continue
+
+                # store error detail if available
+                if err:
+                    self._consist_errors[path_str] = err
+
+                display_missing = missing_count if not (isinstance(missing_count, int) and missing_count == -1) else 'ERR'
+                if display_missing == 'ERR':
+                    tag = 'error'
+                else:
+                    tag = 'missing' if (isinstance(missing_count, int) and missing_count > 0) else 'no_missing'
+
+                try:
+                    self.consist_files_tree.insert('', 'end', iid=path_str, values=(display_missing,), text=display_name, tags=(tag,))
+                except Exception:
+                    # fallback to inserting without iid
+                    try:
+                        self.consist_files_tree.insert('', 'end', values=(display_missing,), text=display_name, tags=(tag,))
+                    except Exception:
+                        pass
+
+                if first_iid is None:
+                    first_iid = path_str
+
+            # configure tag colors
+            try:
+                self.consist_files_tree.tag_configure('missing', foreground=self.colors['missing'])
+                self.consist_files_tree.tag_configure('no_missing', foreground=self.colors['existing'])
+                self.consist_files_tree.tag_configure('error', foreground='#A52A2A')
+            except Exception:
+                pass
+
+            # bind tooltip events for error items
+            try:
+                self.consist_files_tree.bind('<Motion>', self._on_tree_motion)
+                self.consist_files_tree.bind('<Leave>', self._hide_tooltip)
+            except Exception:
+                pass
+
+            # Auto-select and analyze first consist (if any)
+            if first_iid:
+                try:
+                    self.consist_files_tree.selection_set(first_iid)
+                    self.analyze_single_consist(first_iid)
+                    # Update missing items display for the first file
+                    self.update_missing_items_display(first_iid)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            self.log_message(f"Error populating consist files tree: {e}")
     
     def run_resolver(self):
         """Run the consist resolver based on selected mode"""
@@ -2162,8 +2233,8 @@ class ConsistEditorGUI:
                 return
             self._run_resolver_for_file(selected_file, trainset_dir)
         else:
-            # Resolve all files in directory
-            self._run_resolver_for_directory(consists_dir, trainset_dir)
+            # Resolve all files currently shown by the filter (don't re-scan the whole directory)
+            self._run_resolver_for_filtered(consists_dir, trainset_dir)
     
     def _get_selected_consist_file(self):
         """Get the currently selected consist file path"""
@@ -2219,6 +2290,88 @@ class ConsistEditorGUI:
                 self.message_queue.put(('log', f"Error running resolver for directory: {e}"))
 
         threading.Thread(target=_dir_worker, daemon=True).start()
+
+    def _run_resolver_for_filtered(self, consists_dir, trainset_dir):
+        """Run resolver only for files currently shown in the consist files tree (respects filter).
+
+        Copies the visible .con files into a temp directory, runs the resolver there and
+        then copies resolved files back to their original locations. This avoids re-scanning
+        or processing files that are not currently shown by the filter.
+        """
+        import tempfile
+        import shutil
+
+        # Collect visible items from the tree (iids are file paths)
+        try:
+            visible_iids = []
+            for iid in self.consist_files_tree.get_children(''):
+                # The tree only contains currently-populated (filtered) items
+                visible_iids.append(iid)
+        except Exception:
+            visible_iids = []
+
+        if not visible_iids:
+            messagebox.showinfo("Info", "No consist files are currently shown by the filter to resolve.")
+            return
+
+        # Create temp directory and copy only visible files
+        try:
+            temp_dir = tempfile.mkdtemp(prefix='msts_resolve_filter_')
+            for iid in visible_iids:
+                try:
+                    src = Path(iid)
+                    if src.exists():
+                        shutil.copy2(src, Path(temp_dir) / src.name)
+                except Exception as e:
+                    self.message_queue.put(('log', f"Warning copying {iid} to temp dir: {e}"))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to prepare temporary directory for filtered resolve: {e}")
+            return
+
+        # Run resolver in background thread similar to directory runner, but using temp_dir
+        def _filtered_worker():
+            try:
+                # Use the same _run_resolver_thread which will detect changed files
+                return_code = self._run_resolver_thread(temp_dir, trainset_dir, refresh_after=True)
+
+                # After resolver returns, copy changed files back by comparing mtimes
+                try:
+                    # For each file in temp_dir, if a resolved version exists, copy back to original
+                    for p in Path(temp_dir).glob('*.con'):
+                        original = Path(consists_dir) / p.name
+                        try:
+                            if p.exists():
+                                # Only copy back if resolver succeeded (return_code == 0) or file present
+                                if return_code == 0 and original.exists():
+                                    shutil.copy2(str(p), str(original))
+                                    try:
+                                        self.message_queue.put(('files_changed', [str(original)]))
+                                    except Exception:
+                                        pass
+                                elif return_code == 0 and not original.exists():
+                                    # New file created by resolver; copy into consists_dir
+                                    try:
+                                        shutil.copy2(str(p), str(original))
+                                        try:
+                                            self.message_queue.put(('files_changed', [str(original)]))
+                                        except Exception:
+                                            pass
+                                    except Exception as e:
+                                        self.message_queue.put(('log', f"Error copying new resolved file back: {e}"))
+                        except Exception as e:
+                            self.message_queue.put(('log', f"Error copying resolved file {p} back: {e}"))
+                except Exception as e:
+                    self.message_queue.put(('log', f"Error during filtered copy-back: {e}"))
+                finally:
+                    # Cleanup temp dir
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except Exception:
+                        pass
+            except Exception as e:
+                self.message_queue.put(('log', f"Error in filtered resolver worker: {e}"))
+
+        threading.Thread(target=_filtered_worker, daemon=True).start()
 
     def _resolver_file_worker(self, temp_dir, original_consist_path, trainset_dir):
         """Worker to run resolver for a single-file temp directory, copy back results and clean up."""

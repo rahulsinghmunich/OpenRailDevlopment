@@ -849,6 +849,104 @@ class ConsistEditorGUI:
             except Exception:
                 pass
             self.log_message(f"Saved consist to: {file_path}")
+            # Recompute missing count and update cached scan results so the left-hand
+            # consist files list (All / Broken / No Error) updates immediately.
+            try:
+                try:
+                    entries = self.parse_consist_file(file_path)
+                    missing_count = 0
+                    if self.trainset_path.get():
+                        trainset_path = Path(self.trainset_path.get())
+                        for e in entries:
+                            asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
+                            if not asset_path.exists():
+                                missing_count += 1
+                    err = None
+                except Exception as ex:
+                    missing_count = -1
+                    err = str(ex)
+
+                # Update cached scan results list
+                try:
+                    lst = list(getattr(self, '_last_consist_scan_results', []) or [])
+                    updated = []
+                    found = False
+                    display_name = Path(file_path).name
+                    for path_str, dname, mc, er in lst:
+                        if str(path_str) == str(file_path):
+                            updated.append((str(path_str), dname, missing_count, err))
+                            found = True
+                        else:
+                            updated.append((path_str, dname, mc, er))
+                    if not found:
+                        # Add new entry if not previously present
+                        updated.append((str(file_path), display_name, missing_count, err))
+                    self._last_consist_scan_results = updated
+                except Exception:
+                    pass
+
+                # Refresh the consist files tree so filters reflect the updated state
+                try:
+                    self._populate_consist_files_tree()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # Select the saved file in the left-hand tree, set as current and refresh viewer + missing panel
+            try:
+                saved_path = str(file_path)
+                # If the saved file is in a different folder than current consists_path, update combobox hint
+                try:
+                    saved_folder = str(Path(saved_path).parent)
+                    if saved_folder and hasattr(self, 'consists_path') and self.consists_path.get() != saved_folder:
+                        # Add to recent paths and update combobox hint
+                        try:
+                            self._add_recent_path('consists', saved_folder)
+                            if hasattr(self, 'consists_combo'):
+                                vals = self.consists_combo['values'] or []
+                                if saved_folder not in vals:
+                                    newvals = [saved_folder] + list(vals)
+                                    self.consists_combo['values'] = newvals[:2]
+                                # set the combobox text to the saved folder
+                                self.consists_path.set(saved_folder)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Attempt to select the saved file in the tree (iid is the path)
+                try:
+                    if hasattr(self, 'consist_files_tree') and self.consist_files_tree.exists(saved_path):
+                        try:
+                            self.consist_files_tree.selection_set(saved_path)
+                        except Exception:
+                            pass
+                    else:
+                        # If not present, re-populate tree (we already updated cache) and then select
+                        try:
+                            self._populate_consist_files_tree()
+                            if self.consist_files_tree.exists(saved_path):
+                                self.consist_files_tree.selection_set(saved_path)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Set as current file and analyze it in the main viewer
+                try:
+                    self.current_consist_file = saved_path
+                    try:
+                        self.analyze_single_consist(saved_path)
+                    except Exception:
+                        pass
+                    try:
+                        self.update_missing_items_display(saved_path)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            except Exception:
+                pass
         except Exception as e:
             self.log_message(f"Error saving consist: {e}")
     
@@ -1462,8 +1560,8 @@ class ConsistEditorGUI:
                 messagebox.showwarning('Warning', 'No store item selected')
                 return
 
-            # Build list of selected items
-            selected = [self.store_items[i] for i in sel]
+            # Build list of selected items from the filtered listbox (indices refer to filtered_store_items)
+            selected = [self.filtered_store_items[i] for i in sel]
 
             # number to add
             try:

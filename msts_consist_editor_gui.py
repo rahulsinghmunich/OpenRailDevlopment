@@ -170,6 +170,10 @@ class ConsistEditorGUI:
         self.consist_filter_cb = ttk.Combobox(load_frame, textvariable=self.consist_filter_var, values=['All','Broken','No Error'], state='readonly', width=14)
         self.consist_filter_cb.grid(row=0, column=2, sticky=tk.W)
         self.consist_filter_cb.bind('<<ComboboxSelected>>', lambda e: self._apply_consist_filter())
+        # Small status label to show number visible / total
+        self.consist_filter_status_var = tk.StringVar(value='')
+        self.consist_filter_status = ttk.Label(load_frame, textvariable=self.consist_filter_status_var)
+        self.consist_filter_status.grid(row=0, column=3, sticky=tk.W, padx=(8,0))
 
         files_frame = ttk.LabelFrame(parent, text="Consist Files", padding="6")
         files_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
@@ -2205,6 +2209,15 @@ class ConsistEditorGUI:
                     self.update_missing_items_display(first_iid)
                 except Exception:
                     pass
+
+            # Update the showing counter (visible / total)
+            try:
+                total = len(results)
+                visible = len(self.consist_files_tree.get_children(''))
+                if hasattr(self, 'consist_filter_status_var'):
+                    self.consist_filter_status_var.set(f"Showing {visible} / {total}")
+            except Exception:
+                pass
 
         except Exception as e:
             self.log_message(f"Error populating consist files tree: {e}")

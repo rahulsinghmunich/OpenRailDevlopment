@@ -61,6 +61,27 @@ class ConsistEditorGUI:
 
         self._detect_virtual_environment()
 
+    def _dedupe_consist_scan_results(self, results):
+        """Return a de-duplicated list of scan results keeping the last seen entry for each path.
+
+        results: iterable of (path_str, display_name, missing_count, err)
+        """
+        try:
+            seen = {}
+            for path_str, display_name, missing_count, err in results:
+                try:
+                    key = self._normalize_path(path_str)
+                except Exception:
+                    key = str(path_str)
+                seen[key] = (key, display_name, missing_count, err)
+            # keep sorted by path for stable ordering
+            return [seen[k] for k in sorted(seen.keys())]
+        except Exception:
+            try:
+                return list(results)
+            except Exception:
+                return []
+
     def _detect_virtual_environment(self):
         try:
             if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
@@ -106,6 +127,20 @@ class ConsistEditorGUI:
             self.log_message(f"Error detecting virtual environment: {e}, using current Python: {sys.executable}")
         self.setup_gui()
         self.process_messages()
+
+    def _normalize_path(self, p):
+        """Return a stable, absolute, normalized path string for use as cache/tree iids.
+
+        Falls back to os.path.normcase/abspath if Path.resolve() fails.
+        """
+        try:
+            return str(Path(p).resolve())
+        except Exception:
+            try:
+                import os
+                return os.path.normcase(os.path.abspath(str(p)))
+            except Exception:
+                return str(p)
 
     def setup_gui(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -555,6 +590,12 @@ class ConsistEditorGUI:
             total_files = len(files)
             
             for i, cf in enumerate(files, 1):
+                # Skip any backup files created by Save As (e.g., file.con.bak)
+                try:
+                    if str(cf).lower().endswith('.bak') or cf.name.lower().endswith('.bak'):
+                        continue
+                except Exception:
+                    pass
                 # Send progress update for large scans
                 if total_files > 20:  # Only show detailed progress for very large scans
                     self.message_queue.put(('consist_scan_progress', (i, total_files, cf.name)))
@@ -577,7 +618,12 @@ class ConsistEditorGUI:
 
             # Send results to main thread via message queue and signal scan done
             # store results in message so main thread can cache and filter
-            self.message_queue.put(('consist_list_update', results))
+            # Filter out any results that are backup files (safety)
+            try:
+                filtered_results = [r for r in results if not (str(r[0]).lower().endswith('.bak') or str(r[1]).lower().endswith('.bak'))]
+            except Exception:
+                filtered_results = results
+            self.message_queue.put(('consist_list_update', filtered_results))
             self.message_queue.put(('scan_done', None))
 
         threading.Thread(target=worker, args=(consist_files,), daemon=True).start()
@@ -881,7 +927,13 @@ class ConsistEditorGUI:
                     if not found:
                         # Add new entry if not previously present
                         updated.append((str(file_path), display_name, missing_count, err))
-                    self._last_consist_scan_results = updated
+                    try:
+                        self._last_consist_scan_results = self._dedupe_consist_scan_results(updated)
+                    except Exception:
+                        try:
+                            self._last_consist_scan_results = updated
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -986,7 +1038,22 @@ class ConsistEditorGUI:
                 content = None
             
             if content is None:
-                raise ValueError("Could not decode file with any known encoding")
+                # Fallback: try a permissive decode to salvage text (may mangle characters)
+                try:
+                    # Re-read raw bytes if not available
+                    try:
+                        raw
+                    except NameError:
+                        with open(file_path, 'rb') as bf:
+                            raw = bf.read()
+                    content = raw.decode('latin-1', errors='replace')
+                    # Log a warning so user/diagnostics can see that fallback was used
+                    try:
+                        self.log_message(f"Warning: Could not decode {file_path} with standard encodings; used latin-1 fallback (replace)")
+                    except Exception:
+                        pass
+                except Exception:
+                    raise ValueError("Could not decode file with any known encoding")
             
             # Simple regex-based parsing for Engine and Wagon entries.
             # Many consist files include lines like:
@@ -1991,7 +2058,10 @@ class ConsistEditorGUI:
                         results = data
                         try:
                             # cache results so the filter can be re-applied without re-scanning
-                            self._last_consist_scan_results = list(results)
+                            try:
+                                self._last_consist_scan_results = self._dedupe_consist_scan_results(results)
+                            except Exception:
+                                self._last_consist_scan_results = list(results)
                             # populate tree according to current filter
                             self._populate_consist_files_tree()
                         except Exception as e:
@@ -2132,6 +2202,63 @@ class ConsistEditorGUI:
                                 pass
                         except Exception as e:
                             self.log_message(f"Error processing files_changed message: {e}")
+                        # Recompute cached scan results for changed files and reapply current filter
+                        try:
+                            try:
+                                cached = list(getattr(self, '_last_consist_scan_results', []) or [])
+                            except Exception:
+                                cached = []
+                            if changed:
+                                updated = []
+                                changed_set = set([str(p) for p in changed])
+                                # Build a lookup for existing cached entries
+                                cache_map = {str(p[0]): (p[1], p[2], p[3]) for p in cached}
+                                # For all paths mentioned in cache or changed_set, recompute if needed
+                                all_paths = set(list(cache_map.keys())) | changed_set
+                                for path in sorted(all_paths):
+                                    if path in changed_set:
+                                        # recompute missing_count and err
+                                        try:
+                                            missing_count = 0
+                                            err = None
+                                            try:
+                                                entries = self.parse_consist_file(path)
+                                                if self.trainset_path.get():
+                                                    trainset_path = Path(self.trainset_path.get())
+                                                    for e in entries:
+                                                        asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
+                                                        if not asset_path.exists():
+                                                            missing_count += 1
+                                            except Exception as ex:
+                                                missing_count = -1
+                                                err = str(ex)
+                                        except Exception:
+                                            missing_count = -1
+                                            err = 'Error computing missing count'
+                                        display_name = Path(path).name
+                                        updated.append((path, display_name, missing_count, err))
+                                    else:
+                                        # keep existing cache entry
+                                        try:
+                                            dname, mc, er = cache_map.get(path, (Path(path).name, None, None))
+                                            updated.append((path, dname, mc, er))
+                                        except Exception:
+                                            updated.append((path, Path(path).name, None, None))
+                                # Replace cache (deduplicated)
+                                try:
+                                    self._last_consist_scan_results = self._dedupe_consist_scan_results(updated)
+                                except Exception:
+                                    try:
+                                        self._last_consist_scan_results = updated
+                                    except Exception:
+                                        pass
+                                # Reapply filter/populate tree so items move in/out of filtered view
+                                try:
+                                    self._populate_consist_files_tree()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                     elif msg_type == 'refresh_current_consist':
                         # Refresh the consist viewer for the currently loaded file (after resolver updates)
                         try:
@@ -2235,6 +2362,11 @@ class ConsistEditorGUI:
         """
         try:
             results = list(getattr(self, '_last_consist_scan_results', []) or [])
+            # Defensive: filter out any .bak entries from cache (shouldn't exist but be safe)
+            try:
+                results = [r for r in results if not (str(r[0]).lower().endswith('.bak') or str(r[1]).lower().endswith('.bak'))]
+            except Exception:
+                pass
 
             # clear existing
             try:
@@ -2252,6 +2384,12 @@ class ConsistEditorGUI:
             filt = (self.consist_filter_var.get() if hasattr(self, 'consist_filter_var') else 'All')
 
             for path_str, display_name, missing_count, err in results:
+                # Skip backup files (safety)
+                try:
+                    if str(path_str).lower().endswith('.bak') or str(display_name).lower().endswith('.bak'):
+                        continue
+                except Exception:
+                    pass
                 # decide whether this file is considered 'broken'
                 # broken if there was a parse/io error (err), or missing_count indicates missing assets (>0),
                 # or the worker used -1 to indicate an error when counting
@@ -2272,7 +2410,8 @@ class ConsistEditorGUI:
                     tag = 'missing' if (isinstance(missing_count, int) and missing_count > 0) else 'no_missing'
 
                 try:
-                    self.consist_files_tree.insert('', 'end', iid=path_str, values=(display_missing,), text=display_name, tags=(tag,))
+                    norm_key = self._normalize_path(path_str)
+                    self.consist_files_tree.insert('', 'end', iid=norm_key, values=(display_missing,), text=display_name, tags=(tag,))
                 except Exception:
                     # fallback to inserting without iid
                     try:
@@ -2281,7 +2420,10 @@ class ConsistEditorGUI:
                         pass
 
                 if first_iid is None:
-                    first_iid = path_str
+                    try:
+                        first_iid = norm_key
+                    except Exception:
+                        first_iid = path_str
 
             # configure tag colors
             try:
@@ -2425,14 +2567,18 @@ class ConsistEditorGUI:
             messagebox.showinfo("Info", "No consist files are currently shown by the filter to resolve.")
             return
 
-        # Create temp directory and copy only visible files
+        # Create temp directory and copy only visible files, using unique temp names and a mapping
         try:
             temp_dir = tempfile.mkdtemp(prefix='msts_resolve_filter_')
-            for iid in visible_iids:
+            temp_to_original = {}
+            for idx, iid in enumerate(visible_iids):
                 try:
                     src = Path(iid)
                     if src.exists():
-                        shutil.copy2(src, Path(temp_dir) / src.name)
+                        temp_name = f"{idx}_{src.name}"
+                        dst = Path(temp_dir) / temp_name
+                        shutil.copy2(src, dst)
+                        temp_to_original[temp_name] = self._normalize_path(str(src))
                 except Exception as e:
                     self.message_queue.put(('log', f"Warning copying {iid} to temp dir: {e}"))
         except Exception as e:
@@ -2443,34 +2589,38 @@ class ConsistEditorGUI:
         def _filtered_worker():
             try:
                 # Use the same _run_resolver_thread which will detect changed files
-                return_code = self._run_resolver_thread(temp_dir, trainset_dir, refresh_after=True)
+                # Run resolver on temp dir but do NOT auto-enqueue temp-file changes
+                # (we will enqueue original paths after copying back). This avoids
+                # temporary files being added to the main cache and tree.
+                return_code = self._run_resolver_thread(temp_dir, trainset_dir, refresh_after=False)
 
                 # After resolver returns, copy changed files back by comparing mtimes
                 try:
-                    # For each file in temp_dir, if a resolved version exists, copy back to original
+                    # For each file in temp_dir, if a resolved version exists, copy back to its original
                     for p in Path(temp_dir).glob('*.con'):
-                        original = Path(consists_dir) / p.name
                         try:
-                            if p.exists():
-                                # Only copy back if resolver succeeded (return_code == 0) or file present
-                                if return_code == 0 and original.exists():
-                                    shutil.copy2(str(p), str(original))
+                            if not p.exists():
+                                continue
+                            temp_name = p.name
+                            # Only copy back if this temp file corresponds to an original we prepared
+                            orig_path = temp_to_original.get(temp_name)
+                            if not orig_path:
+                                # Unknown output file from resolver; skip to avoid creating duplicates
+                                self.message_queue.put(('log', f"Skipping unknown resolver output: {p.name}"))
+                                continue
+                            # Only copy back if resolver succeeded
+                            if return_code == 0:
+                                try:
+                                    shutil.copy2(str(p), str(orig_path))
                                     try:
-                                        self.message_queue.put(('files_changed', [str(original)]))
+                                        # enqueue normalized path so cache keys match
+                                        self.message_queue.put(('files_changed', [str(self._normalize_path(orig_path))]))
                                     except Exception:
                                         pass
-                                elif return_code == 0 and not original.exists():
-                                    # New file created by resolver; copy into consists_dir
-                                    try:
-                                        shutil.copy2(str(p), str(original))
-                                        try:
-                                            self.message_queue.put(('files_changed', [str(original)]))
-                                        except Exception:
-                                            pass
-                                    except Exception as e:
-                                        self.message_queue.put(('log', f"Error copying new resolved file back: {e}"))
+                                except Exception as e:
+                                    self.message_queue.put(('log', f"Error copying resolved file {p} back to {orig_path}: {e}"))
                         except Exception as e:
-                            self.message_queue.put(('log', f"Error copying resolved file {p} back: {e}"))
+                            self.message_queue.put(('log', f"Error processing resolved file {p}: {e}"))
                 except Exception as e:
                     self.message_queue.put(('log', f"Error during filtered copy-back: {e}"))
                 finally:
@@ -2487,12 +2637,14 @@ class ConsistEditorGUI:
     def _resolver_file_worker(self, temp_dir, original_consist_path, trainset_dir):
         """Worker to run resolver for a single-file temp directory, copy back results and clean up."""
         try:
-            return_code = self._run_resolver_thread(temp_dir, trainset_dir, refresh_after=True)
+            # Run resolver on temp dir without automated refresh; we'll copy back and enqueue the original path.
+            return_code = self._run_resolver_thread(temp_dir, trainset_dir, refresh_after=False)
 
             # Copy the resolved file back to original location if resolver succeeded
             if return_code == 0:
                 resolved_temp_file = Path(temp_dir) / Path(original_consist_path).name
                 self.message_queue.put(('log', f"Checking for resolved temp file: {resolved_temp_file}"))
+
                 if resolved_temp_file.exists():
                     try:
                         self.message_queue.put(('log', f"Copying resolved file from {resolved_temp_file} to {original_consist_path}"))
@@ -2505,14 +2657,16 @@ class ConsistEditorGUI:
                             try:
                                 # Refresh the missing count for this specific file on the main thread
                                 self._refresh_single_file_missing_count(original_consist_path)
-                                
+
                                 # If this is the currently loaded consist file, refresh the consist viewer with updated colors
                                 if hasattr(self, 'current_consist_file') and self.current_consist_file and str(self.current_consist_file) == str(original_consist_path):
                                     self.message_queue.put(('log', f"Refreshing consist viewer for updated file: {original_consist_path}"))
                                     self.message_queue.put(('refresh_current_consist', None))
+
                                 # Also enqueue a targeted files_changed message for the main thread
                                 try:
-                                    self.message_queue.put(('files_changed', [str(original_consist_path)]))
+                                    # enqueue normalized original path
+                                    self.message_queue.put(('files_changed', [str(self._normalize_path(original_consist_path))]))
                                 except Exception:
                                     pass
                             except Exception as e:
@@ -2701,8 +2855,13 @@ class ConsistEditorGUI:
             if refresh_after:
                 try:
                     if changed_files:
-                        self.message_queue.put(('files_changed', changed_files))
-                        self.log_message(f"Files changed: {len(changed_files)} -> queued targeted refresh")
+                            # Normalize paths to ensure cache keys and tree iids match
+                            try:
+                                norm_changed = [self._normalize_path(p) for p in changed_files]
+                            except Exception:
+                                norm_changed = changed_files
+                            self.message_queue.put(('files_changed', norm_changed))
+                            self.log_message(f"Files changed: {len(norm_changed)} -> queued targeted refresh")
                     else:
                         # Fallback: if nothing changed, still ask to refresh current file only
                         self.message_queue.put(('refresh_current_consist', None))

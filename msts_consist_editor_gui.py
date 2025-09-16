@@ -1023,8 +1023,22 @@ class ConsistEditorGUI:
                 name = entry.get('name', '')
                 folder = entry.get('folder', '')
                 
-                # Preserve the exact formatting style from original
-                result.append(f'{indent}{data_type} ( {name} "{folder}" )')
+                # Parse the original line to preserve formatting
+                import re
+                # Match the original format: EngineData/WagonData ( name folder ) or EngineData/WagonData ( name "folder" )
+                match = re.search(r'(EngineData|WagonData)\s*\(\s*([^)]+)\s*\)', line, re.IGNORECASE)
+                if match:
+                    original_content = match.group(2).strip()
+                    # Check if the original had quotes around folder
+                    if '"' in original_content:
+                        # Original had quotes, preserve them
+                        result.append(f'{indent}{data_type} ( {name} "{folder}" )')
+                    else:
+                        # Original didn't have quotes, don't add them
+                        result.append(f'{indent}{data_type} ( {name} {folder} )')
+                else:
+                    # Fallback to quoted format
+                    result.append(f'{indent}{data_type} ( {name} "{folder}" )')
             
             # Handle Flip() line
             elif 'flip (' in line_lower:
@@ -1335,26 +1349,33 @@ class ConsistEditorGUI:
                     # Check for Flip in this Engine/Wagon block
                     flip = False
                     # Find the start of this Engine/Wagon block
-                    block_start = content.rfind('Engine (', 0, start_pos)
-                    if block_start == -1:
-                        block_start = content.rfind('Wagon (', 0, start_pos)
-                    if block_start == -1:
+                    # Look backwards from the current position to find the block start
+                    search_text = content[max(0, start_pos - 500):start_pos]
+                    
+                    # Find the last Engine or Wagon before this position
+                    engine_pos = search_text.rfind('Engine (')
+                    wagon_pos = search_text.rfind('Wagon (')
+                    
+                    if engine_pos > wagon_pos:
+                        block_start = max(0, start_pos - 500) + engine_pos
+                    elif wagon_pos >= 0:
+                        block_start = max(0, start_pos - 500) + wagon_pos
+                    else:
                         block_start = start_pos - 100  # fallback
+
+                    # Find the end of this block (next Engine/Wagon or end of content)
+                    next_engine = content.find('Engine (', start_pos)
+                    next_wagon = content.find('Wagon (', start_pos)
                     
-                    # Find the end of this block (next Engine/Wagon or end of TrainCfg)
-                    block_end = content.find('Engine (', start_pos)
-                    if block_end == -1:
-                        block_end = content.find('Wagon (', start_pos)
-                    if block_end == -1:
-                        block_end = content.find(')', start_pos)
-                        if block_end != -1:
-                            block_end = content.find(')', block_end + 1)
-                            if block_end != -1:
-                                block_end += 1
-                    
-                    if block_end == -1:
-                        block_end = start_pos + 200  # fallback
-                    
+                    if next_engine == -1 and next_wagon == -1:
+                        block_end = len(content)
+                    elif next_engine == -1:
+                        block_end = next_wagon
+                    elif next_wagon == -1:
+                        block_end = next_engine
+                    else:
+                        block_end = min(next_engine, next_wagon)
+
                     search_area = content[block_start:block_end]
                     if re.search(r'\bFlip\s*\(\s*\)', search_area, re.IGNORECASE):
                         flip = True

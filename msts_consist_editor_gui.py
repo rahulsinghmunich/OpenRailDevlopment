@@ -749,286 +749,472 @@ class ConsistEditorGUI:
             pass
 
     def save_current_consist(self):
-        """Save current_entries to a user-specified .con file (simple format)."""
+        """Save current_entries to a user-specified .con file while preserving original structure BUT removing corruption."""
         try:
             if not self.current_entries:
                 messagebox.showwarning('Warning', 'No entries to save')
                 return
-            # If a consist file is selected in the consist files list, save back to that file
+            
+            # Get target file path
             sel = self.consist_files_tree.selection()
             if sel:
-                # The tree iid for consist files is the file path string
                 file_path = sel[0]
             else:
-                file_path = filedialog.asksaveasfilename(defaultextension='.con', filetypes=[('Consist files', '*.con'), ('All files','*.*')])
+                file_path = filedialog.asksaveasfilename(
+                    defaultextension='.con', 
+                    filetypes=[('Consist files', '*.con'), ('All files','*.*')]
+                )
                 if not file_path:
                     return
-
-            # If the target file already exists, ask for confirmation and make a .bak backup
+            
+            # Handle existing file confirmation and backup
             target_exists = Path(file_path).exists()
             if target_exists:
                 if not messagebox.askyesno('Confirm Save', f"Save changes to existing file?\n{file_path}"):
                     return
-                # attempt to make a backup
+                
+                # Create backup
                 try:
                     bak_path = str(file_path) + '.bak'
                     shutil.copy(file_path, bak_path)
                     self.log_message(f"Backup created: {bak_path}")
                 except Exception as ex:
                     self.log_message(f"Warning: failed to create backup: {ex}")
-
-            # Try to merge updated EngineData/WagonData into existing file while preserving all structure
-            def generate_merged_content(orig_content, entries):
-                """Generate merged content preserving original structure but updating EngineData/WagonData"""
-                lines = orig_content.splitlines()
-                result_lines = []
-                entry_index = 0
-                
-                i = 0
-                while i < len(lines):
-                    line = lines[i].strip()
-                    
-                    # Look for Engine/Wagon blocks
-                    if line.lower().startswith(('engine(', 'wagon(')):
-                        # Find the matching closing parenthesis
-                        block_lines = []
-                        paren_depth = 0
-                        j = i
-                        
-                        while j < len(lines):
-                            block_lines.append(lines[j])
-                            paren_count = lines[j].count('(') - lines[j].count(')')
-                            paren_depth += paren_count
-                            
-                            if paren_depth == 0:
-                                break
-                            j += 1
-                        
-                        # Process this block
-                        if entry_index < len(entries):
-                            entry = entries[entry_index]
-                            
-                            # Replace the block while preserving structure
-                            new_block = process_block(block_lines, entry)
-                            result_lines.extend(new_block)
-                            entry_index += 1
-                        else:
-                            # Keep original block if we have more blocks than entries
-                            result_lines.extend(block_lines)
-                        
-                        i = j + 1
-                    else:
-                        # Keep non-Engine/Wagon lines as-is
-                        result_lines.append(lines[i])
-                        i += 1
-                
-                # Add any remaining entries if we have more entries than original blocks
-                while entry_index < len(entries):
-                    entry = entries[entry_index]
-                    kind_block = 'Engine' if entry.get('type','').lower().startswith('e') else 'Wagon'
-                    name = entry.get('name','')
-                    folder = entry.get('folder','')
-                    
-                    new_block = [
-                        f"{kind_block}(",
-                        f"    UiD ( {entry_index} )",
-                        f"    {kind_block}Data ( {name} \"{folder}\" )",
-                        ")"
-                    ]
-                    result_lines.extend(new_block)
-                    entry_index += 1
-                
-                return '\n'.join(result_lines)
             
-            def process_block(block_lines, entry):
-                """Process an Engine/Wagon block, preserving structure but updating EngineData/WagonData"""
-                result = []
-                kind = 'Engine' if entry.get('type','').lower().startswith('e') else 'Wagon'
-                data_type = f"{kind}Data"
-                
-                for line in block_lines:
-                    # Replace EngineData/WagonData line
-                    if data_type.lower() in line.lower():
-                        # Extract indentation
-                        indent = line[:len(line) - len(line.lstrip())]
-                        name = entry.get('name','')
-                        folder = entry.get('folder','')
-                        result.append(f"{indent}{data_type} ( {name} \"{folder}\" )")
-                    else:
-                        # Keep all other lines (UiD, Flip, etc.)
-                        result.append(line)
-                
-                return result
-
-            merged = False  # Always do full rewrite to ensure correct MSTS structure
+            # Read and preserve original file structure
+            original_content = None
+            original_encoding = 'utf-8'
+            original_line_ending = '\n'
+            
             if target_exists:
                 try:
-                    # Handle UTF-16 files
-                    content = None
-                    try:
-                        with open(file_path, 'rb') as bf:
-                            raw = bf.read()
-                        if raw.startswith(b"\xff\xfe"):
-                            content = raw.decode('utf-16')
-                        elif raw.startswith(b"\xfe\xff"):
-                            content = raw.decode('utf-16-be')
-                        else:
-                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as fh:
-                                content = fh.read()
-                    except Exception:
-                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as fh:
-                            content = fh.read()
+                    # Detect encoding and line endings
+                    with open(file_path, 'rb') as bf:
+                        raw_data = bf.read()
                     
-                    # Try to get the original TrainCfg name
-                    original_name = "Generated Consist"
-                    if content:
+                    # Detect encoding
+                    if raw_data.startswith(b'\xff\xfe'):
+                        original_encoding = 'utf-16le'
+                        original_content = raw_data.decode('utf-16le')
+                    elif raw_data.startswith(b'\xfe\xff'):
+                        original_encoding = 'utf-16be'
+                        original_content = raw_data.decode('utf-16be')
+                    else:
+                        original_encoding = 'utf-8'
                         try:
-                            import re
-                            match = re.search(r'TrainCfg\s*\(\s*"([^"]+)"', content, re.IGNORECASE)
-                            if match:
-                                original_name = match.group(1)
-                        except:
-                            pass
-                except Exception as ex:
-                    self.log_message(f"Failed to read original file: {ex}")
-
-            if not merged:
-                # Full rewrite with correct MSTS structure
-                with open(file_path, 'w', encoding='utf-8') as fh:
-                    fh.write('SIMISA@@@@@@@@@@JINX0D0t______\n\n')
-                    fh.write('Train (\n')
-                    fh.write(f'\tTrainCfg ( "{original_name}"\n')
-                    fh.write(f'\t\tName ( "{original_name}" )\n')
-                    fh.write('\t\tSerial ( 1 )\n')
-                    fh.write('\t\tMaxVelocity ( 38.88889 0.39338 )\n')
-                    fh.write('\t\tNextWagonUID ( 0 )\n')
-                    fh.write('\t\tDurability ( 1.00000 )\n')
-                    fh.write('\t)\n')  # Close TrainCfg
+                            original_content = raw_data.decode('utf-8')
+                        except UnicodeDecodeError:
+                            original_content = raw_data.decode('utf-8', errors='ignore')
                     
-                    for i, entry in enumerate(self.current_entries):
-                        kind_block = 'Engine' if entry.get('type','').lower().startswith('e') else 'Wagon'
-                        name = entry.get('name','')
-                        folder = entry.get('folder','')
+                    # Detect line endings
+                    if '\r\n' in original_content:
+                        original_line_ending = '\r\n'
+                    elif '\r' in original_content:
+                        original_line_ending = '\r'
+                    else:
+                        original_line_ending = '\n'
                         
-                        fh.write(f'\t{kind_block} (\n')
-                        fh.write(f'\t\tUiD ( {i} )\n')
-                        fh.write(f'\t\t{kind_block}Data ( {name} "{folder}" )\n')
-                        fh.write('\t)\n')
-                    
-                    fh.write(')\n')  # Close Train
-
+                except Exception as ex:
+                    self.log_message(f"Error reading original file: {ex}")
+                    original_content = None
+            
+            # Generate new content preserving structure
+            if original_content:
+                # Clean and preserve original structure, removing any corruption
+                new_content = self._clean_and_preserve_structure(original_content, self.current_entries, original_line_ending)
+            else:
+                # Create new file with standard MSTS structure
+                new_content = self._generate_new_consist_content(self.current_entries, '\r\n')
+                original_encoding = 'utf-16le'
+                original_line_ending = '\r\n'
+            
+            # Write the file with original encoding and line endings
+            try:
+                if original_encoding.startswith('utf-16'):
+                    # Write as UTF-16 with BOM
+                    with open(file_path, 'wb') as f:
+                        if original_encoding == 'utf-16le':
+                            f.write(new_content.encode('utf-16le'))
+                        else:
+                            f.write(new_content.encode('utf-16be'))
+                else:
+                    # Write as UTF-8
+                    with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                        f.write(new_content)
+                        
+            except Exception as e:
+                self.log_message(f"Error writing file: {e}")
+                raise
+            
+            # Update internal state
             self._unsaved_changes = False
             try:
                 self.save_button.config(state='disabled')
             except Exception:
                 pass
+            
             self.log_message(f"Saved consist to: {file_path}")
-            # Recompute missing count and update cached scan results so the left-hand
-            # consist files list (All / Broken / No Error) updates immediately.
-            try:
-                try:
-                    entries = self.parse_consist_file(file_path)
-                    missing_count = 0
-                    if self.trainset_path.get():
-                        trainset_path = Path(self.trainset_path.get())
-                        for e in entries:
-                            asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
-                            if not asset_path.exists():
-                                missing_count += 1
-                    err = None
-                except Exception as ex:
-                    missing_count = -1
-                    err = str(ex)
-
-                # Update cached scan results list
-                try:
-                    lst = list(getattr(self, '_last_consist_scan_results', []) or [])
-                    updated = []
-                    found = False
-                    display_name = Path(file_path).name
-                    for path_str, dname, mc, er in lst:
-                        if str(path_str) == str(file_path):
-                            updated.append((str(path_str), dname, missing_count, err))
-                            found = True
-                        else:
-                            updated.append((path_str, dname, mc, er))
-                    if not found:
-                        # Add new entry if not previously present
-                        updated.append((str(file_path), display_name, missing_count, err))
-                    try:
-                        self._last_consist_scan_results = self._dedupe_consist_scan_results(updated)
-                    except Exception:
-                        try:
-                            self._last_consist_scan_results = updated
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                # Refresh the consist files tree so filters reflect the updated state
-                try:
-                    self._populate_consist_files_tree()
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            # Select the saved file in the left-hand tree, set as current and refresh viewer + missing panel
-            try:
-                saved_path = str(file_path)
-                # If the saved file is in a different folder than current consists_path, update combobox hint
-                try:
-                    saved_folder = str(Path(saved_path).parent)
-                    if saved_folder and hasattr(self, 'consists_path') and self.consists_path.get() != saved_folder:
-                        # Add to recent paths and update combobox hint
-                        try:
-                            self._add_recent_path('consists', saved_folder)
-                            if hasattr(self, 'consists_combo'):
-                                vals = self.consists_combo['values'] or []
-                                if saved_folder not in vals:
-                                    newvals = [saved_folder] + list(vals)
-                                    self.consists_combo['values'] = newvals[:2]
-                                # set the combobox text to the saved folder
-                                self.consists_path.set(saved_folder)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                # Attempt to select the saved file in the tree (iid is the path)
-                try:
-                    if hasattr(self, 'consist_files_tree') and self.consist_files_tree.exists(saved_path):
-                        try:
-                            self.consist_files_tree.selection_set(saved_path)
-                        except Exception:
-                            pass
-                    else:
-                        # If not present, re-populate tree (we already updated cache) and then select
-                        try:
-                            self._populate_consist_files_tree()
-                            if self.consist_files_tree.exists(saved_path):
-                                self.consist_files_tree.selection_set(saved_path)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                # Set as current file and analyze it in the main viewer
-                try:
-                    self.current_consist_file = saved_path
-                    try:
-                        self.analyze_single_consist(saved_path)
-                    except Exception:
-                        pass
-                    try:
-                        self.update_missing_items_display(saved_path)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-            except Exception:
-                pass
+            
+            # Update cached results and refresh UI
+            self._update_cached_scan_results(file_path)
+            self._refresh_ui_after_save(file_path)
+            
         except Exception as e:
             self.log_message(f"Error saving consist: {e}")
+
+    def _clean_and_preserve_structure(self, original_content, entries, line_ending):
+        """
+        Clean the file by removing corruption while preserving original structure.
+        Keeps all valid content and removes only truly corrupted Engine/Wagon blocks.
+        """
+        lines = original_content.splitlines()
+        result_lines = []
+        entry_index = 0
+        inside_train = False
+        inside_traincfg = False
+        train_depth = 0
+        traincfg_depth = 0
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_stripped = line.strip().lower()
+
+            # Track Train block entry
+            if line_stripped.startswith('train ('):
+                inside_train = True
+                train_depth = 1
+                result_lines.append(line)
+                i += 1
+                continue
+            
+            # Track TrainCfg block entry
+            if inside_train and 'traincfg (' in line_stripped:
+                inside_traincfg = True
+                traincfg_depth = 1
+                result_lines.append(line)
+                i += 1
+                continue            # Update depths for current line
+            if inside_train:
+                train_depth += line.count('(') - line.count(')')
+            if inside_traincfg:
+                traincfg_depth += line.count('(') - line.count(')')
+
+            # Check if we've exited TrainCfg
+            if inside_traincfg and traincfg_depth <= 0:
+                inside_traincfg = False
+                result_lines.append(line)  # Add the closing TrainCfg line
+                i += 1
+                continue
+
+            # Check if we've exited Train
+            if inside_train and train_depth <= 0:
+                inside_train = False
+                result_lines.append(line)  # Add the closing Train line
+                i += 1
+                continue
+
+            # Process content based on location
+            if inside_traincfg:
+                # Inside TrainCfg - process Engine/Wagon blocks and keep other content
+                if line_stripped.startswith('engine (') or line_stripped.startswith('wagon ('):
+                    # Extract complete block
+                    block_lines, block_end_index = self._extract_complete_block(lines, i)
+
+                    if entry_index < len(entries):
+                        # Update block with new data
+                        updated_block = self._update_block_preserve_structure(block_lines, entries[entry_index])
+                        result_lines.extend(updated_block)
+                        entry_index += 1
+                    else:
+                        # Keep original block if no more entries
+                        result_lines.extend(block_lines)
+
+                    i = block_end_index + 1
+                else:
+                    # Keep all other lines inside TrainCfg (parameters, comments, etc.)
+                    result_lines.append(line)
+                    i += 1
+
+            elif inside_train:
+                # Inside Train but outside TrainCfg - keep all structure lines
+                result_lines.append(line)
+                i += 1
+
+            else:
+                # Outside Train block - keep ALL content (headers, comments, metadata, etc.)
+                result_lines.append(line)
+                i += 1
+
+        # Add any remaining entries that weren't processed
+        if entry_index < len(entries):
+            # Find the TrainCfg closing parenthesis to insert before it
+            traincfg_close_index = -1
+            depth = 0
+            in_traincfg = False
+
+            for idx, line in enumerate(result_lines):
+                line_lower = line.strip().lower()
+                if 'traincfg(' in line_lower:
+                    in_traincfg = True
+                    depth = 1
+                    continue
+
+                if in_traincfg:
+                    depth += line.count('(') - line.count(')')
+                    if depth <= 0:
+                        traincfg_close_index = idx
+                        break
+
+            if traincfg_close_index > 0:
+                # Insert new entries before the TrainCfg closing
+                new_entries = []
+                for idx in range(entry_index, len(entries)):
+                    new_block = self._create_new_block_matching_style(
+                        entries[idx],
+                        idx,
+                        result_lines
+                    )
+                    new_entries.extend(new_block)
+
+                # Insert the new entries before TrainCfg close
+                result_lines[traincfg_close_index:traincfg_close_index] = new_entries
+
+        return line_ending.join(result_lines)
+
+    def _extract_complete_block(self, lines, start_index):
+        """Extract a complete Engine/Wagon block, preserving exact formatting."""
+        block_lines = []
+        paren_depth = 0
+        i = start_index
+        
+        while i < len(lines):
+            line = lines[i]
+            block_lines.append(line)
+            
+            # Count parentheses to find block end
+            open_parens = line.count('(')
+            close_parens = line.count(')')
+            paren_depth += open_parens - close_parens
+            
+            if paren_depth == 0 and i > start_index:
+                break
+            i += 1
+        
+        return block_lines, i
+
+    def _update_block_preserve_structure(self, block_lines, entry):
+        """Update Engine/Wagon block data while preserving ALL original formatting."""
+        result = []
+        has_flip = False
+        
+        for line in block_lines:
+            line_lower = line.lower().strip()
+            
+            # Update EngineData or WagonData line
+            if 'enginedata (' in line_lower or 'wagondata (' in line_lower:
+                # Preserve exact indentation and formatting style
+                indent = line[:len(line) - len(line.lstrip())]
+                
+                # Determine if it's Engine or Wagon
+                is_engine = entry.get('type', '').lower().startswith('e')
+                data_type = 'EngineData' if is_engine else 'WagonData'
+                
+                name = entry.get('name', '')
+                folder = entry.get('folder', '')
+                
+                # Preserve the exact formatting style from original
+                result.append(f'{indent}{data_type} ( {name} "{folder}" )')
+            
+            # Handle Flip() line
+            elif 'flip (' in line_lower:
+                has_flip = True
+                if entry.get('flip', False):
+                    result.append(line)  # Keep existing Flip line
+                # If flip is False, skip this line
+            
+            # Keep all other lines exactly as they are
+            else:
+                result.append(line)
+        
+        # Add Flip() if needed and not present
+        if entry.get('flip', False) and not has_flip:
+            # Find appropriate insertion point
+            insert_index = len(result) - 1
+            for i, line in enumerate(result):
+                if 'uid (' in line.lower():
+                    insert_index = i
+                    break
+            
+            # Get indentation from context
+            indent = '\t\t\t'
+            if insert_index > 0:
+                prev_line = result[insert_index - 1]
+                indent = prev_line[:len(prev_line) - len(prev_line.lstrip())]
+            
+            result.insert(insert_index, f'{indent}Flip ( )')
+        
+        return result
+
+    def _create_new_block_matching_style(self, entry, uid, existing_lines):
+        """Create new Engine/Wagon block matching existing style."""
+        # Detect indentation patterns
+        base_indent = '\t\t'
+        block_indent = '\t\t\t'
+        
+        # Find actual indentation from existing blocks
+        for line in existing_lines:
+            line_lower = line.lower().strip()
+            if line_lower.startswith('engine(') or line_lower.startswith('wagon('):
+                base_indent = line[:len(line) - len(line.lstrip())]
+                break
+        
+        for line in existing_lines:
+            line_lower = line.lower().strip()
+            if 'enginedata(' in line_lower or 'wagondata(' in line_lower:
+                block_indent = line[:len(line) - len(line.lstrip())]
+                break
+        
+        is_engine = entry.get('type', '').lower().startswith('e')
+        block_type = 'Engine' if is_engine else 'Wagon'
+        data_type = 'EngineData' if is_engine else 'WagonData'
+        
+        name = entry.get('name', '')
+        folder = entry.get('folder', '')
+        flip = entry.get('flip', False)
+        
+        # Build block
+        new_block = []
+        new_block.append(f'{base_indent}{block_type} (')
+        new_block.append(f'{block_indent}{data_type} ( {name} "{folder}" )')
+        
+        if flip:
+            new_block.append(f'{block_indent}Flip ( )')
+        
+        new_block.append(f'{block_indent}UiD ( {uid} )')
+        new_block.append(f'{base_indent})')
+        
+        return new_block
+
+    def _generate_new_consist_content(self, entries, line_ending):
+        """Generate completely new .con file."""
+        content_lines = []
+        
+        # MSTS header
+        content_lines.append('SIMISA@@@@@@@@@@JINX0D0t______')
+        content_lines.append('')
+        content_lines.append('Train (')
+        content_lines.append('\tTrainCfg ( "Generated Consist"')
+        content_lines.append('\t\tSerial ( 1 )')
+        content_lines.append('\t\tMaxVelocity ( 38.88889 0.39338 )')
+        content_lines.append(f'\t\tNextWagonUID ( {len(entries)} )')
+        content_lines.append('\t\tDurability ( 1.00000 )')
+        
+        # Add entries
+        for i, entry in enumerate(entries):
+            is_engine = entry.get('type', '').lower().startswith('e')
+            block_type = 'Engine' if is_engine else 'Wagon'
+            data_type = 'EngineData' if is_engine else 'WagonData'
+            
+            name = entry.get('name', '')
+            folder = entry.get('folder', '')
+            flip = entry.get('flip', False)
+            uid = entry.get('uid', i)
+            
+            content_lines.append(f'\t\t{block_type} (')
+            content_lines.append(f'\t\t\t{data_type} ( {name} "{folder}" )')
+            
+            if flip:
+                content_lines.append('\t\t\tFlip ( )')
+            
+            content_lines.append(f'\t\t\tUiD ( {uid} )')
+            content_lines.append('\t\t)')
+        
+        content_lines.append('\t)')
+        content_lines.append(')')
+        
+        return line_ending.join(content_lines)
+
+    def _update_cached_scan_results(self, file_path):
+        """Update cached scan results."""
+        try:
+            entries = self.parse_consist_file(file_path)
+            missing_count = 0
+            
+            if self.trainset_path.get():
+                trainset_path = Path(self.trainset_path.get())
+                for e in entries:
+                    asset_path = trainset_path / e['folder'] / f"{e['name']}.{e['extension']}"
+                    if not asset_path.exists():
+                        missing_count += 1
+            
+            err = None
+        except Exception as ex:
+            missing_count = -1
+            err = str(ex)
+        
+        # Update cached results
+        try:
+            lst = list(getattr(self, '_last_consist_scan_results', []) or [])
+            updated = []
+            found = False
+            display_name = Path(file_path).name
+            
+            for path_str, dname, mc, er in lst:
+                if str(path_str) == str(file_path):
+                    updated.append((str(file_path), display_name, missing_count, err))
+                    found = True
+                else:
+                    updated.append((path_str, dname, mc, er))
+            
+            if not found:
+                updated.append((str(file_path), display_name, missing_count, err))
+            
+            try:
+                self._last_consist_scan_results = self._dedupe_consist_scan_results(updated)
+            except Exception:
+                self._last_consist_scan_results = updated
+        except Exception:
+            pass
+
+    def _refresh_ui_after_save(self, file_path):
+        """Refresh UI after save."""
+        try:
+            self._populate_consist_files_tree()
+        except Exception:
+            pass
+        
+        try:
+            saved_folder = str(Path(file_path).parent)
+            if saved_folder and hasattr(self, 'consists_path') and self.consists_path.get() != saved_folder:
+                self._add_recent_path('consists', saved_folder)
+                if hasattr(self, 'consists_combo'):
+                    vals = self.consists_combo['values'] or []
+                    if saved_folder not in vals:
+                        newvals = [saved_folder] + list(vals)
+                        self.consists_combo['values'] = newvals[:2]
+                    self.consists_path.set(saved_folder)
+        except Exception:
+            pass
+        
+        try:
+            saved_path = str(file_path)
+            if hasattr(self, 'consist_files_tree'):
+                if self.consist_files_tree.exists(saved_path):
+                    self.consist_files_tree.selection_set(saved_path)
+                else:
+                    self._populate_consist_files_tree()
+                    if self.consist_files_tree.exists(saved_path):
+                        self.consist_files_tree.selection_set(saved_path)
+        except Exception:
+            pass
+        
+        try:
+            self.current_consist_file = saved_path
+            self.analyze_single_consist(saved_path)
+            self.update_missing_items_display(saved_path)
+        except Exception:
+            pass
     
     def parse_consist_file(self, file_path):
         """Parse consist file and extract entries"""
@@ -1108,8 +1294,13 @@ class ConsistEditorGUI:
             # Sort matches by position in the file
             all_matches.sort(key=lambda x: x[0])
             
+            # Collect UiD matches - be specific to avoid matching NextWagonUID
+            # Only match UiD that appears after Engine( or Wagon( and before EngineData/WagonData
+            uid_pattern = r'(?:Engine\s*\(|Wagon\s*\().*?UiD\s*\(\s*(\d+)\s*\)'
+            uid_matches = list(re.finditer(uid_pattern, content, re.IGNORECASE | re.DOTALL))
+            
             # Process matches in correct order
-            for start_pos, match, kind_group, name_group, folder_group in all_matches:
+            for idx, (start_pos, match, kind_group, name_group, folder_group) in enumerate(all_matches):
                 try:
                     if kind_group is not None:
                         kind = match.group(kind_group)
@@ -1129,13 +1320,53 @@ class ConsistEditorGUI:
                     name = match.group(name_group).strip().strip('"')
                     folder = match.group(folder_group).strip().strip('"')
                     entry_type = 'Engine' if kind.lower().startswith('e') else 'Wagon'
+                    # Get UID - ensure we don't accidentally use NextWagonUID
+                    uid = str(idx)  # Default fallback
+                    if idx < len(uid_matches):
+                        uid_value = uid_matches[idx].group(1)
+                        # Additional safety check - UID should be a reasonable number (not too large)
+                        try:
+                            uid_num = int(uid_value)
+                            if 0 <= uid_num <= 10000:  # Reasonable UID range
+                                uid = uid_value
+                        except ValueError:
+                            pass  # Keep default
+
+                    # Check for Flip in this Engine/Wagon block
+                    flip = False
+                    # Find the start of this Engine/Wagon block
+                    block_start = content.rfind('Engine (', 0, start_pos)
+                    if block_start == -1:
+                        block_start = content.rfind('Wagon (', 0, start_pos)
+                    if block_start == -1:
+                        block_start = start_pos - 100  # fallback
+                    
+                    # Find the end of this block (next Engine/Wagon or end of TrainCfg)
+                    block_end = content.find('Engine (', start_pos)
+                    if block_end == -1:
+                        block_end = content.find('Wagon (', start_pos)
+                    if block_end == -1:
+                        block_end = content.find(')', start_pos)
+                        if block_end != -1:
+                            block_end = content.find(')', block_end + 1)
+                            if block_end != -1:
+                                block_end += 1
+                    
+                    if block_end == -1:
+                        block_end = start_pos + 200  # fallback
+                    
+                    search_area = content[block_start:block_end]
+                    if re.search(r'\bFlip\s*\(\s*\)', search_area, re.IGNORECASE):
+                        flip = True
 
                     # Keep ALL entries (including duplicates) since a consist can have multiple instances of the same wagon
                     entries.append({
                         'type': entry_type,
                         'name': name,
                         'folder': folder,
-                        'extension': 'eng' if entry_type == 'Engine' else 'wag'
+                        'extension': 'eng' if entry_type == 'Engine' else 'wag',
+                        'uid': uid,
+                        'flip': flip
                     })
                 except Exception:
                     continue
@@ -1157,7 +1388,9 @@ class ConsistEditorGUI:
                             'type': entry_type,
                             'name': name,
                             'folder': folder,
-                            'extension': 'eng' if entry_type == 'Engine' else 'wag'
+                            'extension': 'eng' if entry_type == 'Engine' else 'wag',
+                            'uid': str(len(entries)),  # Fallback UID
+                            'flip': False  # Fallback flip
                         })
 
         except Exception as e:
@@ -1790,7 +2023,9 @@ class ConsistEditorGUI:
             new_entry = {'type': 'Engine' if found['extension'].lower().startswith('eng') else 'Wagon',
                          'name': found['name'],
                          'folder': found['folder'],
-                         'extension': found['extension']}
+                         'extension': found['extension'],
+                         'uid': self.current_entries[idx].get('uid', str(idx)),
+                         'flip': self.current_entries[idx].get('flip', False)}  # Preserve original flip value
             # replace
             if 0 <= idx < len(self.current_entries):
                 self.current_entries[idx] = new_entry
@@ -1854,12 +2089,16 @@ class ConsistEditorGUI:
                 insert_index = len(self.current_entries)
 
             # Insert items (each selected item is added 'count' times)
+            max_uid = max([int(e.get('uid', '0')) for e in self.current_entries] + [0])
             for it in selected:
                 for _ in range(count):
                     new_entry = {'type': 'Engine' if it['extension'].lower().startswith('eng') else 'Wagon',
                                  'name': it['name'],
                                  'folder': it['folder'],
-                                 'extension': it['extension']}
+                                 'extension': it['extension'],
+                                 'uid': str(max_uid + 1),
+                                 'flip': False}  # New entries default to no flip
+                    max_uid += 1
                     # clamp index
                     if insert_index < 0:
                         insert_index = 0

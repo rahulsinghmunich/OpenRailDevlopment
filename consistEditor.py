@@ -786,6 +786,9 @@ class IndianRailwaysClassifier:
         "gencar": "gs",
         "unreserved": "gs",
         "second": "gs",
+        "secondclass": "gs",
+        "second_class": "gs",
+        "second-class": "gs",
         # Sleeper variations
         "sl": "sl",
         "slp": "sl",
@@ -1088,13 +1091,19 @@ class AssetMetadataExtractor:
             r"(?i)generator|power[-_]?car": "EOG",
             r"(?i)slr[-_]?": "SLR",
             
-            # Additional coach types
+            # Additional coach types - ordered by specificity (most specific first)
+            r"(?i)slr[-_]?": "SLR",
+            r"(?i)second[-_]?class[-_]?luggage": "SLR",
+            r"(?i)sleeper": "SL",
+            r"(?i)slp": "SL",
+            r"(?i)sl": "SL",
+            r"(?i)ac": "AC",
             r"(?i)gs|general[-_]?second": "GS",
-            r"(?i)slp|second[-_]?class[-_]?luggage": "SL",
-            r"(?i)sl|second[-_]?class|sleeper": "SL",
+            r"(?i)second[-_]?class": "GS",
+            r"(?i)second": "GS",
             r"(?i)cc|chair[-_]?car": "CC",
             r"(?i)fc|first[-_]?class": "FC",
-            r"(?i)sc|second[-_]?class": "SC",
+            r"(?i)sc": "SC",
         }
 
         if not metadata.coach_type:
@@ -1526,12 +1535,13 @@ def enhance_wagon_matching_with_compatibility(
         "HCPV": ["HPCV", "HCPV"],  # Only exact parcel van types, exclude generic PARCEL
         "PARCEL": ["HPCV", "HCPV", "PARCEL"],  # PARCEL can accept all parcel types
         # Brake vans - ENHANCED v2.2.5 - BOBYN is freight wagon, not crew vehicle
-        "BRD": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],  # brake vans
-        "BRN": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],
-        "BRNA": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],
-        "BRW": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],
-        "BRAKE": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],
-        "BVZI": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"],
+        "BRD": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],  # brake vans
+        "BRN": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
+        "BRNA": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
+        "BRW": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
+        "BRAKE": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
+        "BVZI": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
+        "CABOOSE": ["BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI", "CABOOSE"],
 
         # Keep BOBYN strictly in freight group (open wagons)
         "BOBYN": ["BOBYN", "BOXN", "BOY", "BOST"],  # open freight family
@@ -1677,28 +1687,44 @@ def enhance_wagon_matching_with_compatibility(
     return compatible_pool
 
 
-def detect_family_from_name(name: str, role: str = "Engine") -> str:
+def detect_family_from_name(name: str, role: str = "Engine", subtype: str = "") -> str:
     """Detect family from name.
     
     For engines: returns locomotive families (WAP/WAG/WDM/EMU/MEMU)
-    For wagons: returns coach families (AC/RAJDHANI/SLEEPER/GENERAL)
+    For wagons: returns coach families (AC/RAJDHANI/SLEEPER/GENERAL) only for passenger wagons
     """
+    import re
     name_lower = name.lower()
 
-    # For wagons, detect coach families
+    # For wagons, detect coach families ONLY for passenger wagons
     if role == "Wagon":
-        # Coach families from store files
+        # If this is a freight wagon, don't apply passenger coach family detection
+        if subtype == "Freight":
+            return ""  # Freight wagons don't have coach families
+            
+        # Coach families from store files (only for passenger wagons)
         if "rajdhani" in name_lower:
             return "RAJDHANI"
         elif "pantry" in name_lower or "pc" in name_lower:
             return "PANTRY"
-        elif "sleeper" in name_lower or "sl" in name_lower:
+        elif re.search(r'(^|[\s_/-])slr([\s_/-]|\d|$)', name_lower) or name_lower.startswith('slr'):
+            return "SLR"
+        elif "sleeper" in name_lower:
+            return "SLEEPER"
+        elif "sl" in name_lower:
             return "SLEEPER"
         elif "chair" in name_lower or "accc" in name_lower:
             return "CHAIR"
         elif "ac" in name_lower and ("1a" in name_lower or "2a" in name_lower or "3a" in name_lower):
             return "AC"
+        elif "ac" in name_lower:
+            return "AC"
         elif "general" in name_lower or "gs" in name_lower:
+            return "GENERAL"
+        elif "second" in name_lower or "secondclass" in name_lower:
+            # Check if this is actually an SLR coach (like SECOND_CLASS_LUGGAGE)
+            if "luggage" in name_lower:
+                return "SLR"
             return "GENERAL"
         elif "power" in name_lower or "eog" in name_lower:
             return "POWER"
@@ -1741,8 +1767,8 @@ def detect_family_from_name(name: str, role: str = "Engine") -> str:
                     if token == family_key:
                         # Exact match
                         return family_name
-                    elif token.startswith(family_key) and token[len(family_key):].isdigit():
-                        # Family key followed by digits (e.g., "wdg4", "wap7")
+                    elif token.startswith(family_key) and token[len(family_key):].isalnum():
+                        # Family key followed by alphanumeric characters (e.g., "wdg4d", "wap7e")
                         return family_name
                     # Skip other cases to avoid false positives like "wag" in "wagons"
         else:  # Longer indicators use substring match
@@ -1765,8 +1791,8 @@ def detect_family_from_name(name: str, role: str = "Engine") -> str:
                     if token == family_key:
                         # Exact match
                         return family_name
-                    elif token.startswith(family_key) and token[len(family_key):].isdigit():
-                        # Family key followed by digits (e.g., "wdg4", "wap7")
+                    elif token.startswith(family_key) and token[len(family_key):].isalnum():
+                        # Family key followed by alphanumeric characters (e.g., "wdg4d", "wap7e")
                         return family_name
                     # Skip other cases to avoid false positives like "wag" in "wagons"
         else:  # Longer indicators use substring match
@@ -1779,6 +1805,23 @@ def detect_family_from_name(name: str, role: str = "Engine") -> str:
 def detect_subtype_from_name(name: str) -> str:
     """Detect subtype (Passenger/Freight/Maintenance) from name - ENHANCED v2.2.5 WITH FREIGHT ANALYSIS."""
     name_lower = name.lower()
+
+    # ENHANCED: Detect engine subtypes based on locomotive series
+    # Freight locomotives
+    freight_engine_series = [
+        "wag", "wdg", "wdm", "wds", "wam", "wcam", "wcg", "wcm"
+    ]
+    for series in freight_engine_series:
+        if series in name_lower:
+            return "Freight"
+    
+    # Passenger locomotives  
+    passenger_engine_series = [
+        "wap", "wdp"
+    ]
+    for series in passenger_engine_series:
+        if series in name_lower:
+            return "Passenger"
 
     # ENHANCED v2.2.5: Handle manufacturer prefixes FIRST
     clean_name = name_lower
@@ -1806,150 +1849,7 @@ def detect_subtype_from_name(name: str) -> str:
         return "Freight"  # Containers are freight
 
     # ENHANCED: Check for passenger indicators AFTER container detection
-    passenger_indicators = [
-        '1a', '2a', '3a', 'ac', 'sl', 'gen', 'chair', 'sleeper', 'pantry', 'eog', 'pc', 'slr', 'fc', 'sc', 'gn', 'cc', 'accc'
-    ]
-    if any(indicator in name_lower for indicator in passenger_indicators):
-        return "Passenger"
-
-    # FIXED: Add explicit freight locomotive detection FIRST (higher priority)
-    freight_locomotive_indicators = [
-        "wdg",
-        "wag",  # Freight locomotive families
-        "wdg3",
-        "wdg3a",
-        "wdg4",
-        "wdg4d",
-        "wdg4g",  # Diesel freight
-        "wag5",
-        "wag7",
-        "wag9",
-        "wag12",  # Electric freight
-        "freight",
-        "goods",
-        "cargo",  # Generic freight terms
-    ]
-    # Check for freight locomotives with word boundaries to avoid false positives
-    for indicator in freight_locomotive_indicators:
-        if len(indicator) <= 3:
-            # For short indicators, check with word boundaries
-            import re
-            if re.search(r'\b' + re.escape(indicator) + r'\b', name_lower):
-                return "Freight"
-        else:
-            # For longer indicators, use substring match
-            if indicator in name_lower:
-                return "Freight"
-
-    # ENHANCED v2.2.6: Caboose/Brake Van Detection (HIGHEST PRIORITY for wagons)
-    # Check for caboose indicators BEFORE freight wagon detection
-    caboose_indicators = [
-        # Direct caboose terms
-        "caboose",
-        "brake_van",
-        "guard_van",
-        "crew_car",
-        # IR-specific patterns
-        "ir_caboose",
-        "ir_brake",
-        "ir_guard",
-        # Separator-based patterns
-        "_caboose",
-        "/caboose",
-        "-caboose",
-        "caboose_",
-        "caboose/",
-        "caboose-",
-        # Brake van variations
-        "brakevan",
-        "guardvan",
-        "crewvan",
-        # Special designations
-        "bvzi",  # Modern brake van
-        "brd",   # Brake van D
-        "brn",   # Brake van N
-        "brna",  # Brake van NA
-        "brw",   # Brake van W
-    ]
-
-    # ENHANCED v2.2.9: Compound name handling for caboose detection
-    # Check if this is a compound name with multiple type indicators (wagon or locomotive)
-    wagon_type_indicators = [
-        "hcpv", "hpcv",  # Parcel vans
-        "bcna", "bcne", "bcnh", "bcnl", "bccnr",  # Covered wagons
-        "boxn", "boxnha", "boxnhl",  # Box wagons
-        "tank", "tanker",  # Tank wagons
-        "flat", "flatbed",  # Flat wagons
-        "cement", "coil", "container",  # Specialized freight
-    ]
-    
-    locomotive_family_indicators = [
-        "wap", "wag", "wam", "wcam", "wcg", "wcm",  # Electric locomotives
-        "wdg", "wdm", "wdp", "wds",  # Diesel locomotives
-        "emu", "memu", "mmu", "dmu", "demu",  # EMU/DMU
-        "brw", "mgs", "ajj", "tkd", "bza", "bpl", "et",  # Railway division codes that might be locomotive series
-    ]
-    
-    has_wagon_indicators = False
-    for indicator in wagon_type_indicators:
-        if indicator in name_lower or indicator in clean_name:
-            has_wagon_indicators = True
-            break
-    
-    has_locomotive_indicators = False
-    for indicator in locomotive_family_indicators:
-        if indicator in name_lower or indicator in clean_name:
-            has_locomotive_indicators = True
-            break
-    
-    # Additional check: if name looks like a locomotive (has numbers, multiple parts), be conservative
-    looks_like_locomotive = (
-        any(char.isdigit() for char in name) and  # Has numbers
-        ('_' in name or len(name.split()) > 1) and  # Has separators or multiple parts
-        len(name) > 6  # Reasonably long name
-    )
-    
-    # If this is a compound name with wagon OR locomotive indicators, OR looks like a locomotive, be more careful about caboose detection
-    if has_wagon_indicators or has_locomotive_indicators or looks_like_locomotive:
-        # Only classify as caboose if it's clearly a standalone brake van
-        # Check if the primary class is actually a brake van type
-        from consistEditor import detect_wagon_or_engine_class
-        primary_class = detect_wagon_or_engine_class(name, "Wagon") or detect_wagon_or_engine_class(clean_name, "Wagon")
-        brake_van_classes = {"BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"}
-        
-        # If the primary class is NOT a brake van type, don't classify as caboose
-        # even if brake van indicators are present (they might be prefixes or part of compound names)
-        if primary_class and primary_class not in brake_van_classes:
-            logging.debug(f"SUBTYPE_DETECTION: Compound/locomotive name '{name}' with class '{primary_class}' - skipping caboose detection despite brake indicators")
-        else:
-            # For names that look like locomotives but don't have clear class detection,
-            # be more conservative about caboose classification
-            if looks_like_locomotive and not primary_class:
-                logging.debug(f"SUBTYPE_DETECTION: Locomotive-like name '{name}' without clear class - skipping caboose detection")
-            else:
-                # Check for caboose indicators with high priority
-                for indicator in caboose_indicators:
-                    if indicator in name_lower or indicator in clean_name:
-                        logging.debug(f"SUBTYPE_DETECTION: Detected caboose indicator '{indicator}' in '{name}' -> Caboose")
-                        return "Caboose"  # Caboose wagons are distinct from service vehicles
-    else:
-        # For non-compound names, use the original logic
-        # Check for caboose indicators with high priority
-        for indicator in caboose_indicators:
-            if indicator in name_lower or indicator in clean_name:
-                logging.debug(f"SUBTYPE_DETECTION: Detected caboose indicator '{indicator}' in '{name}' -> Caboose")
-                return "Caboose"  # Caboose wagons are distinct from service vehicles
-
-    # ENHANCED v2.2.6: Brake Van Class Detection
-    # If the wagon class is a known brake van type, classify as Caboose
-    from consistEditor import detect_wagon_or_engine_class
-    wagon_class = detect_wagon_or_engine_class(name, "Wagon")
-    brake_van_classes = {"BRD", "BRN", "BRNA", "BRW", "BRAKE", "BVZI"}
-    if wagon_class and wagon_class in brake_van_classes:
-        logging.debug(f"SUBTYPE_DETECTION: Detected brake van class '{wagon_class}' in '{name}' -> Caboose")
-        return "Caboose"  # Brake van classes are caboose vehicles
-
-    # ENHANCED v2.2.5: Enhanced freight wagon detection with manufacturer prefixes
+    # BUT check for freight wagons FIRST to avoid false passenger classification
     freight_wagon_indicators = [
         # Covered wagons (BCNA family) - EXPLICIT
         "bcna",
@@ -1994,6 +1894,8 @@ def detect_subtype_from_name(name: str) -> str:
         "brake",
         "bca",
         "bcb",
+        "caboose",  # Caboose wagons (brake vans)
+        "wagon",   # Generic wagon indicator
         # Parcel and mail (these are freight category)
         "hpcv",
         "hcpv",
@@ -2005,6 +1907,9 @@ def detect_subtype_from_name(name: str) -> str:
         # Specialized freight - ENHANCED v2.2.5
         "coil",
         "slab",
+        "slag",
+        "sled",
+        "slope",
         "billet",
         "pipe",
         "automobile",
@@ -2021,6 +1926,12 @@ def detect_subtype_from_name(name: str) -> str:
         for indicator in freight_wagon_indicators
     ):
         return "Freight"
+
+    passenger_indicators = [
+        '1a', '2a', '3a', 'ac', 'sl', 'gen', 'chair', 'sleeper', 'pantry', 'eog', 'pc', 'slr', 'fc', 'sc', 'gn', 'cc', 'accc'
+    ]
+    if any(indicator in name_lower for indicator in passenger_indicators):
+        return "Passenger"
 
     # Passenger locomotive detection
     passenger_locomotive_indicators = [
@@ -2060,6 +1971,8 @@ def detect_subtype_from_name(name: str) -> str:
         "general",
         "gencar",
         "unreserved",
+        "second",
+        "secondclass",
         "cc",
         "chair",
         "chaircar",
@@ -2209,8 +2122,8 @@ def detect_from_folder(folder: str) -> Tuple[str, str, str, str]:
 
     folder_lower = folder.lower()
 
-    family = detect_family_from_name(folder_lower, "Engine")  # Default to Engine for folder-only detection
     subtype = detect_subtype_from_name(folder_lower)
+    family = detect_family_from_name(folder_lower, "Engine", subtype)  # Default to Engine for folder-only detection
     klass = detect_wagon_or_engine_class(folder_lower)
     build = detect_build_from_name_or_folder("", folder_lower)
 
@@ -2272,12 +2185,12 @@ def apply_strict_attribute_filter(
     for asset in pool:
         # Extract asset attributes (use cached values where available)
         asset_role = "Engine" if asset.kind == AssetKind.ENGINE else "Wagon"
-        asset_family = detect_family_from_name(asset.name, asset_role) or detect_family_from_name(
-            asset.folder, asset_role
-        )
         asset_subtype = detect_subtype_from_name(
             asset.name
         ) or detect_subtype_from_name(asset.folder)
+        asset_family = detect_family_from_name(asset.name, asset_role, asset_subtype) or detect_family_from_name(
+            asset.folder, asset_role, asset_subtype
+        )
         # PERFORMANCE OPTIMIZATION: Use cached class detection
         asset_class = asset.cached_class
         asset_build = detect_build_from_name_or_folder(asset.name, asset.folder)
@@ -2483,8 +2396,8 @@ def pick_strict_default(
 
         # Additional scoring for other attributes
         default_family = detect_family_from_name(
-            default.name, wanted_role
-        ) or detect_family_from_name(default.folder, wanted_role)
+            default.name, wanted_role, default_subtype
+        ) or detect_family_from_name(default.folder, wanted_role, default_subtype)
         default_class = detect_wagon_or_engine_class(default.name, wanted_role)
         default_build = detect_build_from_name_or_folder(default.name, default.folder)
 
@@ -2917,21 +2830,29 @@ def detect_wagon_or_engine_class(name: str, wanted_role: str = "Engine") -> str:
         r'(?<![A-Za-z0-9])bru(?![A-Za-z0-9])': 'BRU',
         r'(?<![A-Za-z0-9])bvcm(?![A-Za-z0-9])': 'BVCM',  # Brake van (before brake to avoid conflicts)
         r'(?<![A-Za-z0-9])brake(?![A-Za-z0-9])': 'BRAKE',
+        r'(?<![A-Za-z0-9])caboose(?![A-Za-z0-9])': 'CABOOSE',  # Caboose wagon
         
         # Coach classes from store files
         r'(?<![A-Za-z0-9])accc(?![A-Za-z0-9])': 'ACCC',  # AC Chair Car - CHECK FIRST
+        r'(?<![A-Za-z0-9])(?i:ac.*chair.*car|ac.*chair|chair.*car.*ac)(?![A-Za-z0-9])': 'ACCC',  # AC Chair Car variations
+        # ACCC compound pattern - MUST BE BEFORE general AC
+        r'(?<![A-Za-z0-9])(?i:ac\s*[-_]?\s*cc|cc\s*[-_]?\s*ac)(?![A-Za-z0-9])': 'ACCC',              # AC Chair Car compound
         r'(?<![A-Za-z0-9])1a(?![A-Za-z0-9])': '1A',      # First AC
+        r'(?<![A-Za-z0-9])(?i:ac.*3.*tier|ac.*tier.*3)(?![A-Za-z0-9])': '3A',  # AC 3 Tier variations - BEFORE 2A
+        r'(?<![A-Za-z0-9])(?i:ac.*2.*tier|ac.*tier.*2)(?![A-Za-z0-9])': '2A',  # AC 2 Tier variations
         r'(?<![A-Za-z0-9])2a(?![A-Za-z0-9])': '2A',      # Second AC
-        r'(?<![A-Za-z0-9])3a(?![A-Za-z0-9])': '3A',      # Third AC
-        r'(?<![A-Za-z0-9])sl(?![A-Za-z0-9])': 'SL',      # Sleeper
-        r'(?<![A-Za-z0-9])slr(?![A-Za-z0-9])': 'SLR',    # Sleeper cum Luggage
+        r'(?<![A-Za-z0-9])(?i:ac.*first.*class|first.*ac)(?![A-Za-z0-9])': '1A',  # AC First Class variations
+        r'(?<![A-Za-z0-9])slr(?![A-Za-z0-9])': 'SLR',    # Sleeper cum Luggage - BEFORE sl
+        r'(?<![A-Za-z0-9])sleeper(?![A-Za-z0-9])': 'SL', # Sleeper (full word)
+        r'(?<![A-Za-z0-9])sl(?![A-Za-z0-9])': 'SL',      # Sleeper - AFTER slr
         r'(?<![A-Za-z0-9])sc(?![A-Za-z0-9])': 'SC',      # Second Class Chair
         r'(?<![A-Za-z0-9])gs(?![A-Za-z0-9])': 'GS',      # General Second
+        r'(?<![A-Za-z0-9])(?i:second\s*class\s*luggage|secondclassluggage|second_class_luggage)(?![A-Za-z0-9])': 'SLR',  # Second Class Luggage
+        r'(?<![A-Za-z0-9])(?i:second\s*class|secondclass|second_class)(?![A-Za-z0-9])': 'GS',  # Second Class variations
+        r'(?<![A-Za-z0-9])second(?![A-Za-z0-9])': 'GS',  # Second (standalone)
         r'(?<![A-Za-z0-9])pc(?![A-Za-z0-9])': 'PC',      # Pantry Car
         r'(?<![A-Za-z0-9])eog(?![A-Za-z0-9])': 'EOG',    # End on Generator
         r'(?<![A-Za-z0-9])fc(?![A-Za-z0-9])': 'FC',      # First Class
-        # ACCC compound pattern - MUST BE BEFORE CC
-        r'(?<![A-Za-z0-9])(?i:ac\s*[-_]?\s*cc|cc\s*[-_]?\s*ac)(?![A-Za-z0-9])': 'ACCC',              # AC Chair Car compound
         r'(?<![A-Za-z0-9])cc(?![A-Za-z0-9])': 'CC',      # AC Chair Car - MOVED AFTER ACCC
         r'(?<![A-Za-z0-9])gn(?![A-Za-z0-9])': 'GN',      # General
         r'(?<![A-Za-z0-9])2s(?![A-Za-z0-9])': '2S',      # Second Sitting
@@ -3042,6 +2963,7 @@ def detect_wagon_or_engine_class(name: str, wanted_role: str = "Engine") -> str:
         # Additional wagon embedded patterns
         r'btcs': 'BTCS',
         r'bvcm': 'BVCM',
+        r'caboose': 'CABOOSE',
         r'coil': 'COIL',
         r'hopper': 'HOPPER',
 
@@ -3379,8 +3301,9 @@ class AssetResolver:
         wanted_role = "Engine" if kind == AssetKind.ENGINE else "Wagon"
 
         # --- STEP 1: DERIVE AND LOCK ATTRIBUTES FROM CONSIST ENTRY ---
-        family = detect_family_from_name(name, wanted_role) or detect_family_from_name(folder, wanted_role)
+        # Determine subtype first to inform family detection
         subtype = detect_subtype_from_name(name) or detect_subtype_from_name(folder)
+        family = detect_family_from_name(name, wanted_role, subtype) or detect_family_from_name(folder, wanted_role, subtype)
         klass = detect_wagon_or_engine_class(name, wanted_role) or detect_wagon_or_engine_class(
             folder, wanted_role
         )
@@ -4320,16 +4243,37 @@ class MSSTResolver:
                         }
                         if result.chosen and getattr(result.chosen, "metadata", None):
                             meta = result.chosen.metadata
-                            chosen_meta["family"] = getattr(meta, "family", "") or ""
-                            chosen_meta["subtype"] = getattr(meta, "subtype", "") or ""
-                            # prefer freight/coach/engine class fields
+                            # First try to detect attributes from asset name/folder
+                            detected_class = ""
+                            detected_subtype = ""
+                            detected_family = ""
+                            detected_build = ""
+                            if result.chosen:
+                                asset_role = "Engine" if result.chosen.kind == AssetKind.ENGINE else "Wagon"
+                                detected_class = detect_wagon_or_engine_class(
+                                    result.chosen.name, asset_role
+                                ) or detect_wagon_or_engine_class(result.chosen.folder, asset_role) or ""
+                                detected_subtype = detect_subtype_from_name(
+                                    result.chosen.name
+                                ) or detect_subtype_from_name(result.chosen.folder) or ""
+                                detected_family = detect_family_from_name(
+                                    result.chosen.name, asset_role, detected_subtype
+                                ) or detect_family_from_name(result.chosen.folder, asset_role, detected_subtype) or ""
+                                detected_build = detect_build_from_name_or_folder(
+                                    result.chosen.name, result.chosen.folder
+                                ) or ""
+                            
+                            # Use detected values first, then metadata, then locked attributes
+                            chosen_meta["family"] = detected_family or getattr(meta, "family", "") or ""
+                            chosen_meta["subtype"] = detected_subtype or getattr(meta, "subtype", "") or ""
                             chosen_meta["class"] = (
-                                getattr(meta, "freight_type", "")
+                                detected_class
+                                or getattr(meta, "freight_type", "")
                                 or getattr(meta, "coach_type", "")
                                 or getattr(meta, "engine_class", "")
                                 or ""
                             )
-                            chosen_meta["build"] = getattr(meta, "build", "") or ""
+                            chosen_meta["build"] = detected_build or getattr(meta, "build", "") or ""
 
                         locked_meta = {
                             "family": details.get("family", "") if details else "",
@@ -4337,6 +4281,17 @@ class MSSTResolver:
                             "class": details.get("class", "") if details else "",
                             "build": details.get("build", "") if details else "",
                         }
+
+                        # For exact matches, if chosen asset has no detectable attributes, use locked attributes
+                        if result.phase == MatchPhase.EXACT_NAME:
+                            if not chosen_meta["family"] and locked_meta["family"]:
+                                chosen_meta["family"] = locked_meta["family"]
+                            if not chosen_meta["subtype"] and locked_meta["subtype"]:
+                                chosen_meta["subtype"] = locked_meta["subtype"]
+                            if not chosen_meta["class"] and locked_meta["class"]:
+                                chosen_meta["class"] = locked_meta["class"]
+                            if not chosen_meta["build"] and locked_meta["build"]:
+                                chosen_meta["build"] = locked_meta["build"]
 
                         # Build per-attribute display showing LOCKED -> CHOSEN
                         attr_pairs = []
